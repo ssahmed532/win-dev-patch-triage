@@ -44,6 +44,20 @@ Prefer the vendor's page. When a news site or aggregator disagrees with it, go w
 | Bun | https://bun.com/blog (release posts). The GitHub releases page can embed signed download URLs, so do not use it |
 | Windows | https://msrc.microsoft.com/update-guide and the current month's Patch Tuesday; compare with the OS build and UBR from the inventory |
 
+## AI agent apps and CLIs
+
+Check every entry in `inventory.ai_apps` and `inventory.ai_clis`, one row per copy. `scan_dependencies.py` already
+matches CLI copies against OSV, and those hits show in the digest. The research adds the latest version, advisories
+OSV does not carry yet, and the desktop apps, which have no advisory feed a scanner can query.
+
+| Product | Page | What to read |
+|---|---|---|
+| Claude Code | https://github.com/anthropics/claude-code/security/advisories, https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md and https://github.com/advisories?query=%40anthropic-ai%2Fclaude-code | Advisories (filed under the npm package `@anthropic-ai/claude-code`, which applies to the native and winget builds too, since they share version numbers) and the newest version. The native installer updates itself; winget and bun copies do not |
+| Claude Desktop | https://nvd.nist.gov/vuln/search (keyword "Claude Desktop"), the Claude Code advisories above (some cover "Claude Code and Claude Desktop"), and https://support.claude.com/en/articles/12138966-release-notes | Anthropic publishes no version-numbered security notes for the desktop app: its release notes name features, not builds. Take CVEs and affected versions from NVD and the GitHub advisories; take the newest build from `winget_available` in the inventory and say that it comes from winget |
+| ChatGPT desktop | https://help.openai.com/en/articles/10003026-chatgpt-windows-app-release-notes and https://nvd.nist.gov/vuln/search (keyword "ChatGPT") | Its MSIX package is named `OpenAI.Codex`, and the inventory reports it under its display name. The help page often returns 403 to automated fetches; when it does, take the newest build from `winget_available` and record the gap under Limits. OpenAI publishes no security bulletin for the app |
+| Codex CLI | https://github.com/openai/codex/security/advisories, https://github.com/openai/codex/releases and https://github.com/advisories?query=%40openai%2Fcodex | Advisories (npm package `@openai/codex`) and the newest `rust-v*` release. The ChatGPT app bundles its own Codex runtime, which updates with the app |
+| OpenCode | https://github.com/anomalyco/opencode/security/advisories and https://github.com/anomalyco/opencode/releases | Advisories (npm package `opencode-ai`) and the newest release. The project moved from `sst/opencode`; links to the old repository redirect |
+
 ## Feeds that catch everything else
 
 - CISA alerts and the Known Exploited Vulnerabilities catalog: https://www.cisa.gov/news-events/cybersecurity-advisories and https://www.cisa.gov/known-exploited-vulnerabilities-catalog

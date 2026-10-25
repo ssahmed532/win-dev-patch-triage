@@ -5,6 +5,7 @@ ranked remediation page: what to update today, this week, and in the backlog, wi
 
 It checks:
 - installed apps and browsers (winget, plus file versions for apps winget does not track)
+- AI agent apps and CLIs: the Claude and ChatGPT desktop apps, and every copy of Claude Code, Codex and OpenCode (native, winget, npm or bun), with the CLIs checked against OSV
 - language runtimes and toolchains: Node.js, CPython via uv, .NET, Go, PowerShell, Git and others on PATH, plus PHP, Java or Ruby found off PATH
 - global npm, bun and uv tools, including the libraries bundled inside them (via OSV)
 - Go-built programs on PATH (gh, lazygit, fzf, ...): the Go version and modules compiled into each, read from the file and checked against OSV
@@ -141,7 +142,7 @@ so a repo's `go.mod` cannot make Go download and run a different toolchain.
 ## What leaves your machine
 
 - **Package names and versions** of your dependencies go to OSV (`api.osv.dev`) for the global npm, bun and uv tools,
-  the crates in each `Cargo.lock`, and the Go modules compiled into programs on PATH, and to the advisory sources behind `uv audit`, `pip-audit`, `npm audit`, `dotnet list package --vulnerable` and
+  the crates in each `Cargo.lock`, the Go modules compiled into programs on PATH, and the versions of the AI agent CLIs, and to the advisory sources behind `uv audit`, `pip-audit`, `npm audit`, `dotnet list package --vulnerable` and
   `govulncheck` for your projects. Advisory IDs go to the GitHub Advisory Database through `gh` when it is signed in.
 - **Product names and versions** of installed software go into the research agent's web fetches and web searches,
   and the vendor pages it reads see those requests.

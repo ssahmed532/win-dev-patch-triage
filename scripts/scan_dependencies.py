@@ -13,7 +13,7 @@ Side effects outside RUN: the uv, npm and Go caches download what they need. `do
 projects themselves are not touched.
 The .NET and Go scans evaluate a project's build files, which can run code from the repo; folders listed in
 untrusted_projects are skipped, and Go never downloads the toolchain a go.mod asks for (GOTOOLCHAIN=local).
-Cargo.lock files and the Go programs on PATH (their embedded build info) are checked against OSV.
+Cargo.lock files, the Go programs on PATH (their embedded build info) and the AI agent CLIs are checked against OSV.
 """
 import argparse
 import functools
@@ -40,7 +40,7 @@ os.environ.update({"DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1", "DOTNET_GENERATE_AS
 OSV = "https://api.osv.dev/v1"
 # inventory fields that must be JSON lists; PowerShell turns a one-element array into a bare value unless it is wrapped in @()
 LIST_FIELDS = ("runtimes", "python_on_path", "uv_tools", "uv_pythons", "installed_apps", "duplicate_apps", "browsers",
-               "off_path_runtimes", "wsl", "listening", "manifests")
+               "off_path_runtimes", "wsl", "listening", "manifests", "ai_clis", "ai_apps")
 # Scanner code that is downloaded and executed on every run. Pinned on purpose: bump these with a release, after
 # reading the scanner's release notes, rather than running whatever is newest on the day.
 PIP_AUDIT = "2.10.1"
@@ -296,6 +296,27 @@ def scan_globals(inv, deps):
         record("osv-uv-tools", "uv tool list", False, None, repr(e))
 
 
+def scan_ai_clis(inv, deps):
+    """AI agent CLIs installed outside npm and bun (native installer, winget, scoop): each copy's version checked
+    against OSV under the npm package its vendor files advisories for, since these builds share its version numbers.
+    npm and bun copies are left to scan_globals, which reads the same package from node_modules."""
+    pk = defaultdict(set)
+    for c in inv.get("ai_clis") or []:
+        if c["method"] in ("npm", "bun"):
+            continue
+        if not c.get("version"):
+            record("osv-ai-clis", c["path"], False, None, f"no version in `{c['name']} --version` output: {c.get('version_output')}")
+            continue
+        pk[(c["npm_package"], c["version"])].add(f"{c['name']} ({c['method']}) {c['path']}")
+    try:
+        hits = osv_scan(pk, "npm") if pk else []
+        out = save(deps, "osv__ai-clis.json", json.dumps({"ecosystem": "npm", "scope_note": "AI agent CLI, matched by its npm version",
+                                                          "packages_checked": len(pk), "hits": hits}, indent=2))
+        record("osv-ai-clis", "AI agent CLIs", True, out, f"{len(pk)} copies outside npm and bun checked")
+    except Exception as e:
+        record("osv-ai-clis", "AI agent CLIs", False, None, repr(e))
+
+
 def scan_cargo(d, roots, deps):
     """Cargo.lock: the crates.io crates it pins, checked against OSV (which carries the RustSec advisories).
     Path and git dependencies, and crates from other registries, are not in OSV and are skipped."""
@@ -501,6 +522,7 @@ def main():
     for s in solutions:
         scan_dotnet(s, roots, deps)
     scan_globals(inv, deps)
+    scan_ai_clis(inv, deps)
     scan_go_binaries(deps)
     save(deps, "dockerfiles.json", json.dumps(dockerfiles, indent=2))
 

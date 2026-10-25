@@ -34,6 +34,8 @@ Installed:
 - .NET SDKs: <list>; .NET runtimes: <list>; `dotnet sdk check` says: <its status lines>
 - Global npm packages: <name@version>; bun global: <from raw/bun-global.txt>
 - Apps: <installed_apps, name and version, excluding drivers, runtimes and redistributables already listed>
+- AI agent desktop apps: <inventory.ai_apps: name, version, source, and winget_available when set>
+- AI agent CLIs, every copy: <inventory.ai_clis: name, version, method and path, and winget_available when set>
 - WSL <distro>: apt lists last refreshed <date>; <key packages>
 - Off-PATH runtimes found: <list or "none">
 
@@ -42,6 +44,9 @@ Also check:
   Run one extended web search for this.
 - Cross-cutting incidents such as a CA compromise, and which of the installed tools ship their own CA bundle.
 - CISA KEV additions in the window that affect any installed product.
+- For each AI agent app and CLI above, any security advisory at all, of any date, that the installed version is
+  behind. Report each CLI copy on its own row, since copies are updated separately. For the desktop apps, say whether
+  the latest version came from the vendor or only from winget.
 
 Reply with one compact table: product | installed | latest | security release in window (Y/N, CVEs, severity,
 date) | behind any security release? | source URL. Then add two short lists: what you could not verify, and the

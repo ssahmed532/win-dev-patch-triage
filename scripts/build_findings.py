@@ -222,6 +222,10 @@ def inventory_delta(old, new):
             d[f"dotnet {line.split(' [')[0]}"] = "installed"
         for line in (inv.get("dotnet") or {}).get("sdks") or []:
             d[f"dotnet sdk {line.split(' [')[0]}"] = "installed"
+        for c in inv.get("ai_clis") or []:
+            d[f"ai cli {c['name']} ({c['method']}) {c['path']}"] = c.get("version")
+        for p in inv.get("ai_apps") or []:
+            d[f"ai app {p['name']} ({p['source']})"] = p.get("version")
         for w in inv.get("wsl") or []:
             for kp in w.get("key_packages") or []:
                 name, _, ver = kp.partition(" ")
@@ -403,6 +407,20 @@ def main():
         for r in dup_cmds:
             flag = "  [SHADOWS A SYSTEM COPY: a user-writable folder comes first on PATH]" if r.get("shadows_system_copy") else ""
             print(f"  command  {r['name']}: {' | '.join(r['all_paths'])} (the first one runs){flag}")
+
+    # the desktop apps have no advisory feed a scanner can query, so the research agent checks them against the vendor;
+    # winget's offer is a hint that a newer build exists, not proof that the installed one is vulnerable
+    ai_apps, ai_clis = inv.get("ai_apps") or [], inv.get("ai_clis") or []
+    if ai_apps or ai_clis or inv.get("ai_apps_error"):
+        print("\nAI AGENT APPS AND CLIS (every copy; OSV hits for the CLIs are in the rows above, under ai-clis, npm-global or bun-global)")
+        for p in ai_apps:
+            print(f"  app  {p['name']} {p['version']} ({p['source']}{', package ' + p['package'] if p.get('package') else ''})"
+                  f"{' | winget offers ' + p['winget_available'] if p.get('winget_available') else ''}")
+        for c in ai_clis:
+            print(f"  cli  {c['name']} {c.get('version') or 'version not read'} ({c['method']}) {c['path']}"
+                  f"{' | winget offers ' + c['winget_available'] if c.get('winget_available') else ''}")
+        if inv.get("ai_apps_error"):
+            print(f"  {inv['ai_apps_error'][:200]}")
 
     if out["not_scanned"]:
         print("\nNOT SCANNED")

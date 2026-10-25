@@ -39,8 +39,6 @@ They are ordered by priority within each section. Items marked **(seen)** came f
       CrystalDiskInfo, Token Monitor, VLC, fzf, lazygit, bat, delta, eza, fd, ripgrep, zoxide, the Visual C++
       redistributables and the Visual Studio Installer. Add the ones that publish security notes, and list the rest
       under Limits automatically.
-- [ ] **Claude Code in the vendor list.** The latest version could not be verified on either run **(seen)**. Add its
-      release notes and the GitHub advisory search for the npm package.
 - [ ] **Docker images.** Scan local images with an SBOM/vulnerability tool when the engine is running, and check the
       `FROM` lines in Dockerfiles against the base images' advisories.
 - [ ] **Non-apt WSL distros.** Inventory Fedora, openSUSE, Alpine and Arch packages (rpm, apk, pacman) and check

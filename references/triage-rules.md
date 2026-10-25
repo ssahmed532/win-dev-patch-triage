@@ -37,6 +37,13 @@ Decide an item's band by working down this list. Stop at the first rule that mat
 - Sources you could not verify, and conflicts between sources.
 - What this run does not cover, and its side effects.
 
+AI agent apps and CLIs (Claude Desktop, ChatGPT, Claude Code, Codex, OpenCode) read untrusted repositories, web
+pages and MCP tool output, and can run commands as the user. They count as handling untrusted input under Today
+rules 2 and 5, and rank with browsers below. Give each vulnerable copy of a CLI its own line in the item, with its
+path and install method, because each copy updates separately. The action for a stale copy that is not the one that
+runs is to uninstall it. A desktop app that is only behind winget's offered version, with no advisory, is Backlog:
+say that no advisory was found.
+
 Software that IT manages, such as a VPN client or EDR agent, gets the band its severity and exposure call for. The action is "ask IT to update to <version>".
 
 ## Listening ports
@@ -61,7 +68,7 @@ several PATH folders. Like a flagged port, an entry is a prompt to look, not a f
   alias folder (`WindowsApps`) listed after the real install is normal, and not a finding.
 
 Within a band, rank by exposure first and severity second:
-1. Browsers and anything that handles untrusted network input.
+1. Browsers, AI agent apps and CLIs, and anything else that handles untrusted network input.
 2. Language runtimes and toolchains (everything built or run with them inherits the flaw).
 3. Libraries in projects that run as services or process untrusted files.
 4. Global CLI tools and MCP servers.

@@ -2,8 +2,8 @@
 name: win-dev-patch-triage
 description: >
   Read-only security patch triage of a Windows developer workstation. It inventories installed apps,
-  browsers, language runtimes, global npm/bun/uv tools, Go-built programs, .NET, Go, WSL distros and listening
-  ports; audits every dependency lockfile under one or more projects folders (uv, pip, npm, NuGet, Go, Cargo); checks vendor
+  browsers, AI agent apps and CLIs (Claude Desktop, ChatGPT, Claude Code, Codex, OpenCode), language runtimes,
+  global npm/bun/uv tools, Go-built programs, .NET, Go, WSL distros and listening ports; audits every dependency lockfile under one or more projects folders (uv, pip, npm, NuGet, Go, Cargo); checks vendor
   advisories released in the last N hours (default 24); and publishes a ranked remediation page:
   Today / This week / Backlog, with a delta against the previous run. Use this skill when the user
   asks what needs patching or updating on their machine, asks to scan installed packages, runtimes or
@@ -17,8 +17,8 @@ compatibility: >
   the Artifact tool; without it the run stays dry.
 license: MIT
 metadata:
-  version: "1.7.1"
-  updated: "2026-10-23"
+  version: "1.8.0"
+  updated: "2026-10-25"
 ---
 
 # Workstation patch triage
@@ -115,6 +115,10 @@ the run again at step 1.
    off PATH under `runtime_search_roots`, WSL distros (package manager, and key packages and apt staleness for apt-based
    ones), listening ports, and every manifest under the projects roots. For each command it records every folder on
    PATH that holds a copy, and it lists apps registered with more than one version (`duplicate_apps`).
+   AI agent tools get their own lists. `ai_apps` holds the Claude and ChatGPT desktop apps (MSIX or classic installer).
+   `ai_clis` holds every copy of `claude`, `codex` and `opencode`, on PATH or in the vendor's install folder, each with
+   its version, install method (standalone, winget, npm, bun, scoop, chocolatey), the npm package OSV files its
+   advisories under, and the version winget offers when winget manages it.
 
 3. **Start the upstream research in the background** as soon as the inventory exists. Fill
    `references/research-brief.md` from `inventory.json` and `run.json`, and spawn one general-purpose agent with it
@@ -124,8 +128,9 @@ the run again at step 1.
 4. **Dependency scans** (about 2 minutes, in parallel with step 3). `uv run "SKILL/scripts/scan_dependencies.py" --run RUN`.
    It runs uv audit, pip-audit (on a resolved copy), npm audit, dotnet list --vulnerable and govulncheck. It checks
    these against OSV: every package bundled inside global npm and bun installs, the uv tools, the crates in each
-   `Cargo.lock`, and the Go standard library and modules compiled into each Go program on PATH. That last check reads
-   the build info from the file and never runs the program. Projects under `untrusted_projects` get no .NET or Go
+   `Cargo.lock`, the Go standard library and modules compiled into each Go program on PATH, and each AI agent CLI copy
+   installed outside npm and bun (matched by its version under its npm package name). The Go check reads the build
+   info from the file and never runs the program. Projects under `untrusted_projects` get no .NET or Go
    scan and no resolution of a manifest that has no lockfile. A solution or Go module whose folder contains an
    untrusted folder is skipped too.
    Anything it could not scan is printed as NOT SCANNED and recorded in `RUN/deps/scan_status.json`.
@@ -141,6 +146,7 @@ the run again at step 1.
    - INSTALLED-SOFTWARE CHANGES since the previous run (apps, runtimes, OS, tools, WSL packages);
    - DUPLICATE INSTALLS: apps registered with more than one version, and commands found in several PATH folders,
      marked when a user-writable copy shadows a system one;
+   - AI AGENT APPS AND CLIS: every desktop app and CLI copy with its version and winget's offer;
    - NOT SCANNED;
    - SCAN NOTES.
    Read the digest; open `findings.json` only for detail you need.
@@ -161,6 +167,9 @@ the run again at step 1.
      with its version; a python.org or Anaconda install on PATH is not a finding by itself);
    - runtimes found off PATH;
    - the DUPLICATE INSTALLS section of the digest, judged by the duplicate rules in the triage rules;
+   - the AI AGENT APPS AND CLIS section of the digest, with the research rows for each app and copy, judged by the
+     AI agent rule in the triage rules. When none of the five tools is installed, say so in one line under Already
+     patched, so the reader knows they were looked for;
    - `raw/dotnet-sdk-check.txt` for out-of-support .NET versions. It is Microsoft's own status, so cite it, and record a
      conflict if the research says otherwise;
    - Dockerfile base images (`RUN/deps/dockerfiles.json`), noted as not scanned if Docker is not running.
@@ -225,6 +234,15 @@ the run again at step 1.
 - **Side effects to report.** The inventory starts each WSL distro. The uv, npm and Go caches download scanner
   packages. govulncheck can touch a project's `.git` folder timestamp. The scripts turn off .NET's first-use setup,
   which would otherwise create a development HTTPS certificate in the user's certificate store.
+- **AI agent CLIs come in several copies.** One machine can have Claude Code from the native installer, winget and
+  bun, each on its own version. The native installer updates itself, but the others do not, and winget's manifest can
+  trail the vendor. A stale copy that is not first on PATH still runs when a script or IDE calls it by path. OSV
+  matches native and winget builds through the npm package, which shares their version numbers. The npm and bun copies
+  are covered by the global npm/bun scan instead, so they show under those labels.
+- **AI desktop apps have no security bulletins.** Neither Anthropic nor OpenAI publishes version-numbered security
+  notes for the Claude or ChatGPT desktop app. CVEs come from NVD and GitHub advisories, and the newest build often
+  only from winget. Say that on the page rather than calling the app current. The ChatGPT app's MSIX package is named
+  `OpenAI.Codex`; the inventory lists it as ChatGPT.
 - **Docker images are not scanned** when the engine is stopped. Say so rather than skipping it silently.
 - **WSL distros that are not apt-based** (Fedora, openSUSE, Alpine, Arch) are listed with their package manager and
   no key packages. Say under Limits that they were not inventoried. When WSL is not installed, `inventory.wsl` is empty.

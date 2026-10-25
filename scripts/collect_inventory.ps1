@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Read-only inventory of installed software, runtimes, global tools, WSL, listening ports and
+    Read-only inventory of installed software, runtimes, global tools, AI agent apps and CLIs, WSL, listening ports and
     dependency manifests. Writes RUN/inventory.json plus raw text output under RUN/raw/.
 
 .DESCRIPTION
@@ -110,6 +110,55 @@ $inv.browsers = @(foreach ($p in @(
     if (Test-Path $p) { @{ path = $p; version = (Get-Item $p).VersionInfo.ProductVersion } }
 })
 
+# --- AI agent apps and CLIs: they read untrusted repos and web pages and can run commands.
+# The version winget offers for a package, read from the line of the upgrade list that matches it; $null when winget has none.
+$wingetUpgrade = @(Get-Content (Join-Path $raw 'winget-upgrade.txt') -ErrorAction SilentlyContinue)
+function Winget-Available([string]$pattern) {
+    $l = $wingetUpgrade | Where-Object { $_ -match $pattern -and $_ -match '\swinget\s*$' } | Select-Object -First 1
+    if ($l) { $t = @("$l".Trim() -split '\s+'); $t[-2] }
+}
+# A machine often has several copies of one CLI (native installer, winget, npm, bun), each updated on its own, so every
+# copy on PATH or in the vendor's install folder is run with --version. npm_package is the name OSV files the CLI's
+# advisories under; the native and winget builds share its version numbers.
+$aiClis = [ordered]@{ claude = '@anthropic-ai/claude-code'; codex = '@openai/codex'; opencode = 'opencode-ai' }
+$aiCliDirs = "$env:USERPROFILE\.local\bin", "$env:LOCALAPPDATA\Programs\OpenAI\Codex\bin", "$env:USERPROFILE\.opencode\bin"
+$npmPrefix = if ($inv.npm_global_root) { Split-Path $inv.npm_global_root -Parent } else { $null }
+$inv.ai_clis = @(foreach ($k in $aiClis.Keys) {
+        $seen = @{}  # WinGet\Links holds links to the files under WinGet\Packages: one entry per real file's folder
+        $copies = @(@(Get-Command $k -All -CommandType Application -ErrorAction SilentlyContinue | ForEach-Object Source) +
+            @($aiCliDirs | ForEach-Object { Join-Path $_ "$k.exe" }) +
+            @(Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\*\$k.exe" -ErrorAction SilentlyContinue | ForEach-Object FullName) |
+            Where-Object { $_ -and (Test-Path $_) } |
+            ForEach-Object { $t = [IO.File]::ResolveLinkTarget($_, $true); if ($t) { $t.FullName } else { $_ } } |
+            Where-Object { $d = Split-Path $_ -Parent; if ($seen[$d]) { $false } else { $seen[$d] = $true; $true } })
+        foreach ($c in $copies) {
+            $method = if ($c -match '\\WinGet\\') { 'winget' } elseif ($c -match '\\\.bun\\') { 'bun' } elseif ($c -match '\\scoop\\') { 'scoop' }
+            elseif ($c -match '\\chocolatey\\') { 'chocolatey' }
+            elseif ($npmPrefix -and $c.StartsWith($npmPrefix, [StringComparison]::OrdinalIgnoreCase)) { 'npm' } else { 'standalone' }
+            $out = First-Line { & $c --version }.GetNewClosure()
+            $wingetId = if ($c -match '\\WinGet\\Packages\\([^_\\]+)_') { $Matches[1] } else { $null }
+            [ordered]@{
+                name = $k; npm_package = $aiClis[$k]; path = $c; method = $method
+                version = $(if ($out -match '\d+\.\d+\.\d+') { $Matches[0] } else { $null }); version_output = $out
+                winget_id = $wingetId; winget_available = $(if ($wingetId) { Winget-Available "\s$([regex]::Escape($wingetId))\s" } else { $null })
+            }
+        }
+    })
+# Desktop apps. MSIX packages are named by the display name in their manifest, since the ChatGPT app's package is
+# called OpenAI.Codex. Apps registered by a classic installer are taken from installed_apps.
+$inv.ai_apps = @(
+    try {
+        Get-AppxPackage -ErrorAction Stop | Where-Object { ($_.Name -eq 'Claude' -and $_.Publisher -match 'Anthropic') -or $_.Name -like 'OpenAI.*' } |
+            ForEach-Object {
+                $n = (Get-AppxPackageManifest $_).Package.Properties.DisplayName
+                [ordered]@{ name = $n; package = $_.Name; version = "$($_.Version)"; source = 'msix'; path = $_.InstallLocation
+                    winget_available = Winget-Available "^$([regex]::Escape($n))\s.*\s$([regex]::Escape("$($_.Version)"))\s" }
+            }
+    } catch { $inv.ai_apps_error = "Get-AppxPackage failed, so MSIX installs of Claude and ChatGPT were not read: $_" }
+    $inv.installed_apps | Where-Object { $_.name -match '^(Claude|ChatGPT)$' -and $_.publisher -match 'Anthropic|OpenAI' } |
+        ForEach-Object { [ordered]@{ name = $_.name; package = $null; version = $_.version; source = 'installer'; path = $null
+                winget_available = Winget-Available "^$([regex]::Escape($_.name))\s.*\s$([regex]::Escape($_.version))\s" } })
+
 # --- OS patch level
 $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 # ProductName still says "Windows 10" on many Windows 11 installs; the build number is what decides it
@@ -181,4 +230,4 @@ $inv.manifests = @($(foreach ($root in @($run.projects_roots | Where-Object { Te
     }) | Sort-Object)
 
 $inv | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $RunDir 'inventory.json') -Encoding utf8
-"inventory: $(@($inv.runtimes | Where-Object version).Count) runtimes, $($inv.manifests.Count) manifests, $(@($inv.wsl).Count) WSL distros, $(@($inv.listening | Where-Object risky).Count) risky listening ports"
+"inventory: $(@($inv.runtimes | Where-Object version).Count) runtimes, $(@($inv.ai_apps).Count) AI apps, $(@($inv.ai_clis).Count) AI CLI copies, $($inv.manifests.Count) manifests, $(@($inv.wsl).Count) WSL distros, $(@($inv.listening | Where-Object risky).Count) risky listening ports"
