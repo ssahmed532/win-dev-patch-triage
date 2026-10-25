@@ -1,6 +1,7 @@
 # TODO: making the skill reusable across Windows 11 machines
 
-Improvements found during the first runs on THINKPAD-E15 (v1.5 to v1.7.1, 23 October 2026), and not done yet.
+Improvements found during the first runs on THINKPAD-E15 (v1.5 to v1.7.1, 23 October 2026, and v1.8.0, 25 October
+2026), and not done yet.
 They are ordered by priority within each section. Items marked **(seen)** came from a real run, not from analysis.
 
 ## 1. Machines other than this laptop
@@ -50,6 +51,17 @@ They are ordered by priority within each section. Items marked **(seen)** came f
 - [ ] **Microsoft Store and MSIX apps.** `installed_apps` reads only the uninstall registry. Add `Get-AppxPackage` for
       Store apps that handle untrusted content (for example the Raw Image Extension, whose CVE-2026-96202 could not
       be checked on the first run **(seen)**).
+- [ ] **Repository-only advisories for the AI agent CLIs.** OSV missed two Claude Code advisories that are published
+      only on the repository's advisory page (CVE-2026-103435 and CVE-2026-103012, against the bun copy 2.1.27), so
+      they were added to the page by hand **(seen)**. In `scan_ai_clis`, also read
+      `gh api repos/<owner>/<repo>/security-advisories` for anthropics/claude-code, openai/codex and
+      anomalyco/opencode, and match each copy's version against `vulnerable_version_range`. Merge by GHSA ID with
+      the OSV hits, and skip this check, recording it as not scanned, when `gh` is missing or signed out.
+- [ ] **Electron version in Electron apps.** The Electron CA fix (CVE-2026-115570, fixed in 42.11.16, 43.8.1 and
+      44.9.1) could not be checked against Claude Desktop, VS Code, Discord, balenaEtcher or MarkText, because the
+      inventory does not record which Electron each app ships **(seen)**. Read it from the app's files without
+      running the app (for example the Electron version string embedded in the main executable or `resources`), and
+      check it against OSV under the npm package `electron`, as the Go check does for Go programs.
 - [ ] **Browser extensions.** List Chrome, Edge and Firefox extensions with their versions; they handle untrusted
       content with the browser's privileges.
 
