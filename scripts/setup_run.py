@@ -247,7 +247,8 @@ def previous_run(runs_root, current):
 
 # tool -> what a run loses without it (scan_dependencies.py records the affected projects as NOT SCANNED)
 OPTIONAL_TOOLS = {
-    "gh": "severity and publish dates come from OSV only (sign in with `gh auth login` for the GitHub Advisory Database)",
+    "gh": "severity and publish dates come from OSV only (sign in with `gh auth login` for the GitHub Advisory Database), "
+          "and the PHP, Bun, Composer and pnpm repository advisories are read through GitHub's unauthenticated API",
     "npm": "npm projects and global npm packages are not audited",
     "dotnet": ".NET projects are not audited",
     "go": "Go projects are not audited (Go-built programs on PATH are still checked, from their embedded build info)",

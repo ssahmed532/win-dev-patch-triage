@@ -13,22 +13,28 @@ Side effects outside RUN: the uv, npm and Go caches download what they need. `do
 projects themselves are not touched.
 The .NET and Go scans evaluate a project's build files, which can run code from the repo; folders listed in
 untrusted_projects are skipped, and Go never downloads the toolchain a go.mod asks for (GOTOOLCHAIN=local).
-Cargo.lock files, the Go programs on PATH (their embedded build info) and the AI agent CLIs are checked against OSV.
+Cargo, Composer, pnpm, yarn, bun and npm lockfiles, the Go programs on PATH (their embedded build info) and the AI agent
+CLIs are checked against OSV. Every Node.js, PHP and Bun copy is checked against the vendor's release feed or the
+security advisories on its GitHub repository.
 """
 import argparse
 import functools
 import json
 import mmap
+import operator
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tomllib
+import urllib.error
 import urllib.request
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.version import InvalidVersion, Version
 
 sys.dont_write_bytecode = True  # the skill folder may be read-only or replaced by an update; write nothing into it
 from skill_version import SKILL_VERSION  # noqa: E402
@@ -40,12 +46,15 @@ os.environ.update({"DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1", "DOTNET_GENERATE_AS
 OSV = "https://api.osv.dev/v1"
 # inventory fields that must be JSON lists; PowerShell turns a one-element array into a bare value unless it is wrapped in @()
 LIST_FIELDS = ("runtimes", "python_on_path", "uv_tools", "uv_pythons", "installed_apps", "duplicate_apps", "browsers",
-               "off_path_runtimes", "wsl", "listening", "manifests", "ai_clis", "ai_apps")
+               "off_path_runtimes", "wsl", "listening", "manifests", "ai_clis", "ai_apps", "runtime_copies")
 # Scanner code that is downloaded and executed on every run. Pinned on purpose: bump these with a release, after
 # reading the scanner's release notes, rather than running whatever is newest on the day.
 PIP_AUDIT = "2.10.1"
 GOVULNCHECK = "v1.9.0"
 status = []
+# every package version checked against OSV, and where it was found, so the triage can look up a malicious version that
+# the research reports before OSV lists it: ecosystem -> name -> version -> places
+INDEX = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
 
 
 def inside(path, folder):
@@ -249,23 +258,38 @@ def bundled_npm_packages(root_dir):
     return found
 
 
+def osv_request(req, timeout):
+    """One OSV call, tried three times: with many lockfiles a run sends hundreds, and single connections time out."""
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.load(r)
+        except urllib.error.URLError:
+            if attempt == 2:
+                raise
+
+
 def osv_post(path, body):
-    req = urllib.request.Request(f"{OSV}/{path}", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        return json.load(r)
+    return osv_request(urllib.request.Request(f"{OSV}/{path}", data=json.dumps(body).encode(),
+                                              headers={"Content-Type": "application/json"}), 120)
 
 
-def osv_get(vid, cache):
-    if vid not in cache:
-        with urllib.request.urlopen(f"{OSV}/vulns/{vid}", timeout=60) as r:
-            cache[vid] = json.load(r)
-    return cache[vid]
+OSV_RECORDS = {}  # shared by every scan in the run: lockfiles often have the same advisories
 
 
-def osv_scan(packages, ecosystem):
-    """packages: {(name, version): owners}. Returns OSV records joined to the packages they affect."""
+def osv_get(vid):
+    if vid not in OSV_RECORDS:
+        OSV_RECORDS[vid] = osv_request(f"{OSV}/vulns/{vid}", 60)
+    return OSV_RECORDS[vid]
+
+
+def osv_scan(packages, ecosystem, label=None):
+    """packages: {(name, version): owners}. Returns OSV records joined to the packages they affect. OSV also lists
+    malicious package versions, under MAL- IDs."""
+    for (n, v), owners in packages.items():
+        INDEX[ecosystem][n][v].update(f"{label}: {o}" if label else o for o in owners)
     keys = sorted(packages)
-    hits, cache = [], {}
+    hits = []
     for i in range(0, len(keys), 500):
         chunk = keys[i:i + 500]
         res = osv_post("querybatch", {"queries": [{"package": {"name": n, "ecosystem": ecosystem}, "version": v} for n, v in chunk]})
@@ -273,17 +297,22 @@ def osv_scan(packages, ecosystem):
             for vuln in r.get("vulns", []) or []:
                 hits.append({"name": n, "version": v, "owners": sorted(packages[(n, v)]), "id": vuln["id"]})
     for h in hits:
-        h["osv"] = osv_get(h["id"], cache)
+        h["osv"] = osv_get(h["id"])
     return hits
 
 
 def scan_globals(inv, deps):
-    for label, root_dir in (("npm-global", inv.get("npm_global_root")), ("bun-global", inv.get("bun_global_root"))):
+    trees = [("npm-global", inv.get("npm_global_root"), "bundled in a global install"),
+             ("bun-global", inv.get("bun_global_root"), "bundled in a global install")]
+    # the npm and corepack that ship inside each Node.js copy; `npm root -g` does not cover them
+    trees += [("node-bundled", os.path.join(os.path.dirname(c["path"]), "node_modules"), f"ships with Node.js at {c['path']}")
+              for c in inv.get("runtime_copies") or [] if c["name"] == "node"]
+    for i, (label, root_dir, scope) in enumerate(trees):
         try:
             pk = bundled_npm_packages(root_dir)
-            hits = osv_scan(pk, "npm") if pk else []
-            out = save(deps, f"osv__{label}.json", json.dumps({"ecosystem": "npm", "root": root_dir, "packages_checked": len(pk),
-                                                               "hits": hits}, indent=2))
+            hits = osv_scan(pk, "npm", label) if pk else []
+            out = save(deps, f"osv__{label}_{i}.json", json.dumps({"ecosystem": "npm", "root": root_dir, "scope_note": scope,
+                                                                   "packages_checked": len(pk), "hits": hits}, indent=2))
             record("osv-" + label, root_dir or "(none)", True, out, f"{len(pk)} bundled packages checked")
         except Exception as e:  # network or parse failure: report it, keep scanning the rest
             record("osv-" + label, root_dir or "(none)", False, None, repr(e))
@@ -317,20 +346,228 @@ def scan_ai_clis(inv, deps):
         record("osv-ai-clis", "AI agent CLIs", False, None, repr(e))
 
 
-def scan_cargo(d, roots, deps):
-    """Cargo.lock: the crates.io crates it pins, checked against OSV (which carries the RustSec advisories).
-    Path and git dependencies, and crates from other registries, are not in OSV and are skipped."""
+# ---------- lockfiles checked against OSV: the (name, version) pairs are read from the file; nothing is installed or run ----------
+
+def parse_cargo(path):
+    """crates.io crates only: path and git dependencies, and crates from other registries, are not in OSV."""
+    with open(path, "rb") as f:
+        lock = tomllib.load(f)
+    return {(p["name"], p["version"]) for p in lock.get("package", []) if "crates.io" in str(p.get("source", ""))}
+
+
+def parse_composer(path):
+    with open(path, encoding="utf-8") as f:
+        lock = json.load(f)
+    # a branch such as dev-main has no release to match
+    return {(p["name"], p["version"]) for p in (lock.get("packages") or []) + (lock.get("packages-dev") or [])
+            if re.match(r"v?\d", p.get("version") or "")}
+
+
+def parse_package_lock(path):
+    """package-lock.json v2 and v3. A v1 file has no "packages" section and is left to npm audit."""
+    with open(path, encoding="utf-8") as f:
+        lock = json.load(f)
+    return {(p.get("name") or key.rpartition("node_modules/")[2], p["version"])  # "name" is set for an aliased package
+            for key, p in (lock.get("packages") or {}).items()
+            if "node_modules/" in key and not p.get("link") and re.match(r"\d", p.get("version") or "")}
+
+
+# keys under packages: and snapshots:, such as 'name@1.2.3' (v9), /@scope/name@1.2.3(peer@1.0.0) (v6), /name/1.2.3_peer@1.0.0 (v5)
+PNPM_KEY = re.compile(r"^  '?/?((?:@[^/@\s']+/)?[^/@\s'(]+)[@/](\d[^\s:'(_]*)")
+
+
+def parse_pnpm(path):
+    found, section = set(), None
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip() and not line[0].isspace():
+                section = line.split(":")[0]
+            elif section in ("packages", "snapshots") and (m := PNPM_KEY.match(line)):
+                found.add(m.groups())
+    return found
+
+
+def parse_yarn(path):
+    """yarn.lock: an unindented entry line ("name@^1.0.0", name@~1.1:) followed by its version, written as
+    `version "1.2.3"` (classic) or `version: 1.2.3` (Berry)."""
+    found, name = set(), None
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip() and line[0] not in " #":
+                m = re.match(r'"?(@?[^@"\s]+)@', line)
+                name = m.group(1) if m else None
+            elif name and (m := re.match(r'  version:? "?(\d[^"\s]*)', line)):
+                found.add((name, m.group(1)))
+                name = None
+    return found
+
+
+def parse_bun(path):
+    """bun.lock (text; Bun 1.2 and later): each package entry is an array whose first item is "name@version".
+    Workspace, git and file entries have no registry version and do not match."""
+    with open(path, encoding="utf-8") as f:
+        return set(re.findall(r'\[\s*"(@?[^@"\s]+)@(\d[^"]*)"', f.read()))
+
+
+LOCKFILES = {"cargo.lock": ("crates.io", parse_cargo), "composer.lock": ("Packagist", parse_composer),
+             "package-lock.json": ("npm", parse_package_lock), "pnpm-lock.yaml": ("npm", parse_pnpm),
+             "yarn.lock": ("npm", parse_yarn), "bun.lock": ("npm", parse_bun)}
+
+
+def scan_lockfile(path, roots, deps):
+    """A lockfile's packages checked against OSV (which carries the GitHub, RustSec and PHP advisories and the
+    malicious-package reports). package-lock.json also gets npm audit; the two are merged by advisory ID later."""
+    name = os.path.basename(path)
+    eco, parse = LOCKFILES[name.lower()]
     try:
-        with open(os.path.join(d, "Cargo.lock"), "rb") as f:
-            lock = tomllib.load(f)
-        pk = {(p["name"], p["version"]): {rel(d, roots)} for p in lock.get("package", [])
-              if "crates.io" in str(p.get("source", ""))}
-        hits = osv_scan(pk, "crates.io") if pk else []
-        out = save(deps, f"osv__cargo__{slug(d, roots)}.json",
-                   json.dumps({"ecosystem": "crates.io", "scope_note": None, "packages_checked": len(pk), "hits": hits}, indent=2))
-        record("osv-cargo", d, True, out, f"{len(pk)} crates.io crates checked")
+        pk = {k: {rel(path, roots)} for k in parse(path)}
+        hits = osv_scan(pk, eco) if pk else []
+        out = save(deps, f"osv__lock__{slug(path, roots)}.json",
+                   json.dumps({"ecosystem": eco, "scope_note": None, "packages_checked": len(pk), "hits": hits}, indent=2))
+        record("osv-lockfile", os.path.dirname(path), True, out)
     except Exception as e:  # unreadable lockfile or network failure
-        record("osv-cargo", d, False, None, repr(e))
+        record("osv-lockfile", os.path.dirname(path), False, None, f"{name}: {e!r}")
+
+
+# ---------- Node.js, PHP, Bun, Composer and pnpm themselves ----------
+
+NODE_DIST = "https://nodejs.org/dist/index.json"
+NODE_SCHEDULE = "https://raw.githubusercontent.com/nodejs/Release/main/schedule.json"
+PHP_RELEASES = "https://www.php.net/releases/index.php?json&max=200&version={}"
+PHP_STATES = "https://www.php.net/releases/states.php"
+# Vendors that publish advisories on their GitHub repository, where OSV may not have them (it had none of Bun's 1.4.4
+# advisories). Each is checked against every copy in runtime_copies, or else the version its command reports.
+REPO_ADVISORIES = {"php": "php/php-src", "bun": "oven-sh/bun", "composer": "composer/composer", "pnpm": "pnpm/pnpm"}
+CMP = {"<": operator.lt, "<=": operator.le, ">": operator.gt, ">=": operator.ge, "=": operator.eq}
+
+
+def get_json(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "win-dev-patch-triage", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.load(r)
+
+
+def github_api(path):
+    """GitHub's REST API through gh when it is signed in, otherwise unauthenticated (60 requests an hour)."""
+    code, out, err = run(["gh", "api", path])
+    return json.loads(out) if code == 0 else get_json(f"https://api.github.com/{path}")
+
+
+def in_range(version, rng):
+    """Whether a version is inside a GitHub vulnerable_version_range: '< 8.3.36', '>= 1.3.14, < 1.4.4', '>=11.0.0 <11.11.0'."""
+    pairs = re.findall(r"(<=|>=|<|>|=)\s*([0-9][\w.+-]*)", rng or "")
+    try:
+        return bool(pairs) and all(CMP[op](Version(version), Version(v)) for op, v in pairs)
+    except InvalidVersion:
+        return False
+
+
+def first_version(text):
+    m = re.search(r"\d[\w.+-]*", text or "")
+    try:
+        return Version(m.group(0)) if m else None
+    except InvalidVersion:
+        return None
+
+
+def matching_entries(version, entries):
+    """The entries of one advisory that cover a version. PHP files one entry per release line with only an upper bound
+    ('< 8.4.24' next to '< 8.3.33'), so such an entry counts only for a version on its own line. The line is cut at the
+    first version part where the advisory's fixed versions differ: 8.3 against 8.4 for PHP, 10 against 11 for pnpm."""
+    fixed = [f.release for e in entries if (f := first_version(e.get("patched_versions")))]
+    cut = min((next((i for i, (a, b) in enumerate(zip(r, fixed[0])) if a != b), None) for r in fixed[1:]),
+              key=lambda i: 99 if i is None else i, default=None)
+    matched = []
+    for e in entries:
+        rng = e.get("vulnerable_version_range") or ""
+        fix = first_version(e.get("patched_versions"))
+        if not in_range(version, rng):
+            continue
+        if ">" not in rng and cut is not None and fix and Version(version).release[:cut + 1] != fix.release[:cut + 1]:
+            continue  # an upper bound only, for another release line
+        matched.append(e)
+    return matched
+
+
+def scan_runtime_releases(inv, deps):
+    """Each Node.js and PHP copy against the vendor's release feed, which marks every security release and gives each
+    line's end of support. One finding per copy, not per CVE; the CVEs are in the vendor's release notes."""
+    copies = [c for c in inv.get("runtime_copies") or [] if c["name"] in ("node", "php")]
+    if not copies:
+        return
+    hits, today = [], datetime.now(timezone.utc).date().isoformat()
+    try:
+        node = (get_json(NODE_DIST), get_json(NODE_SCHEDULE)) if any(c["name"] == "node" for c in copies) else None
+        php_states = get_json(PHP_STATES) if any(c["name"] == "php" for c in copies) else None
+        for c in copies:
+            m = re.match(r"\d+\.\d+\.\d+", c.get("version") or "")
+            if not m:
+                record("runtime-releases", c["path"], False, None, f"no version in the file's version resource: {c.get('version')}")
+                continue
+            v = m.group(0)
+            if c["name"] == "node":
+                line = v.split(".")[0]
+                releases = [(r["version"][1:], r["date"], r["security"]) for r in node[0] if r["version"][1:].split(".")[0] == line]
+                end = (node[1].get(f"v{line}") or {}).get("end")
+                url = "https://nodejs.org/en/blog/vulnerability"
+            else:
+                line = ".".join(v.split(".")[:2])
+                releases = [(k, datetime.strptime(r["date"], "%d %b %Y").date().isoformat(), "security" in (r.get("tags") or []))
+                            for k, r in get_json(PHP_RELEASES.format(line)).items() if isinstance(r, dict) and "date" in r]
+                state = (php_states.get(line.split(".")[0]) or {}).get(line)
+                end = state["security_support_end"][:10] if state else "1970-01-01"  # php.net lists supported lines only
+                url = f"https://www.php.net/ChangeLog-{line.split('.')[0]}.php"
+            security = sorted((r for r in releases if r[2] and Version(r[0]) > Version(v)), key=lambda r: Version(r[0]))
+            latest = max((r[0] for r in releases), key=Version, default=None)
+            base = {"product": c["name"], "copy": f"{c['path']} ({c['source']})", "installed": v, "url": url}
+            if security:
+                hits.append({**base, "ids": [f"{c['name']}-{security[-1][0]}-security-release"], "published": security[-1][1],
+                             "fixed": [latest], "title": f"{len(security)} security release(s) on the {line} line since {v}: "
+                                                         + ", ".join(f"{r[0]} ({r[1]})" for r in security)})
+            if end and end < today:
+                hits.append({**base, "ids": [f"{c['name']}-{line}-end-of-life"], "published": None, "fixed": [],
+                             "title": f"the {line} line is out of support" + ("" if end.startswith("1970") else f" since {end}")
+                                      + ": it gets no more security fixes"})
+        out = save(deps, "runtime__releases.json", json.dumps({"hits": hits}, indent=2))
+        record("runtime-releases", "Node.js and PHP copies", True, out)
+    except Exception as e:  # a feed that cannot be read or has changed shape
+        record("runtime-releases", "Node.js and PHP copies", False, None, repr(e))
+
+
+def scan_repo_advisories(inv, deps):
+    """PHP, Bun, Composer and pnpm against the security advisories published on their GitHub repositories."""
+    copies = defaultdict(list)  # product -> [(version, where)]
+    for c in inv.get("runtime_copies") or []:
+        copies[c["name"]].append((c.get("version"), f"{c['path']} ({c['source']})"))
+    for r in inv.get("runtimes") or []:
+        if r["name"] in REPO_ADVISORIES and r["name"] not in copies and r.get("version"):
+            m = re.search(r"\d+\.\d+\.\d+", r["version"])
+            copies[r["name"]].append((m and m.group(0), r.get("path")))
+    for product, repo in REPO_ADVISORIES.items():
+        if not copies.get(product):
+            continue
+        try:
+            advisories = [a for a in github_api(f"repos/{repo}/security-advisories?per_page=100") if not a.get("withdrawn_at")]
+        except Exception as e:
+            record("repo-advisories", repo, False, None, repr(e))
+            continue
+        hits = []
+        for version, where in copies[product]:
+            if not version:
+                record("repo-advisories", where, False, None, f"the {product} version could not be read")
+                continue
+            for a in advisories:
+                matched = matching_entries(version, a.get("vulnerabilities") or [])
+                if matched:
+                    cvss = a.get("cvss_severities") or {}
+                    hits.append({"product": product, "copy": where, "installed": version,
+                                 "ids": [a["ghsa_id"]] + ([a["cve_id"]] if a.get("cve_id") else []),
+                                 "severity": a.get("severity"), "published": a.get("published_at"), "title": a.get("summary"),
+                                 "cvss": (cvss.get("cvss_v4") or {}).get("score") or (cvss.get("cvss_v3") or {}).get("score"),
+                                 "url": a.get("html_url"),
+                                 "fixed": [m.group(0) for x in matched if (m := re.search(r"\d[\w.+-]*", x.get("patched_versions") or ""))]})
+        out = save(deps, f"repo__{repo.replace('/', '_')}.json", json.dumps({"repo": repo, "hits": hits}, indent=2))
+        record("repo-advisories", repo, True, out)
 
 
 # ---------- Go programs on PATH: Go version and modules read from the build info the Go linker embeds ----------
@@ -502,29 +739,37 @@ def main():
                 scan_unlocked_python(os.path.join(d, f), roots, deps, work, pythons)
         if "package-lock.json" in lower:
             scan_npm(d, roots, deps)
-        elif lower & {"pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"}:
-            record("js-lockfile", d, False, None, "pnpm, yarn and bun lockfiles are not scanned by this skill; audit by hand")
+        for f in sorted(files):
+            if f.lower() in LOCKFILES:
+                scan_lockfile(os.path.join(d, f), roots, deps)
+        if "bun.lockb" in lower and "bun.lock" not in lower:
+            record("osv-lockfile", d, False, None, "bun.lockb is Bun's binary lockfile format, which is not read; "
+                                                   "Bun 1.2 and later write the text format, bun.lock")
         for f in files:
             if f.endswith(".csproj") and not in_a_solution(os.path.join(d, f)) and trusted(os.path.join(d, f), "dotnet-vulnerable", d):
                 scan_dotnet(os.path.join(d, f), roots, deps)
         if "go.mod" in lower and trusted(d, "govulncheck"):  # ./... loads every package below, untrusted folders included
             scan_go(d, roots, deps)
-        if "cargo.lock" in lower:
-            scan_cargo(d, roots, deps)
         for f in sorted(files):  # Dockerfile, Dockerfile.cli, api.Dockerfile, ...
             if re.search(r"^dockerfile(\..+)?$|\.dockerfile$", f, re.I):
                 with open(os.path.join(d, f), encoding="utf-8", errors="replace") as fh:
                     dockerfiles.append({"path": os.path.join(d, f),
                                         "from": [l.strip() for l in fh if l.strip().upper().startswith("FROM ")]})
-        if "gemfile.lock" in lower or "composer.lock" in lower:
-            record("other-lockfile", d, False, None, "Gemfile and composer lockfiles are not scanned by this skill")
+        if "gemfile.lock" in lower:
+            record("other-lockfile", d, False, None, "Gemfile.lock files are not scanned by this skill")
 
     for s in solutions:
         scan_dotnet(s, roots, deps)
+    if inv.get("composer_global_lock"):
+        scan_lockfile(inv["composer_global_lock"], roots, deps)
     scan_globals(inv, deps)
     scan_ai_clis(inv, deps)
     scan_go_binaries(deps)
+    scan_runtime_releases(inv, deps)
+    scan_repo_advisories(inv, deps)
     save(deps, "dockerfiles.json", json.dumps(dockerfiles, indent=2))
+    save(deps, "package_index.json", json.dumps({eco: {n: {v: sorted(w) for v, w in vs.items()} for n, vs in names.items()}
+                                                 for eco, names in INDEX.items()}, indent=1))
 
     with open(os.path.join(deps, "scan_status.json"), "w", encoding="utf-8") as f:
         json.dump({"skill_version": SKILL_VERSION, "scans": status}, f, indent=2)

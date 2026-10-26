@@ -32,9 +32,8 @@ They are ordered by priority within each section. Items marked **(seen)** came f
 
 ## 2. Coverage gaps
 
-- [ ] **More lockfiles through OSV.** `Gemfile.lock` (RubyGems), `composer.lock` (Packagist), `pnpm-lock.yaml`,
-      `yarn.lock` and `bun.lock` (npm). Today they are reported as not scanned. The Cargo code in
-      `scan_dependencies.py` (`scan_cargo`) is the pattern to copy.
+- [ ] **Gemfile.lock through OSV.** It is reported as not scanned. Add a parser to `LOCKFILES` in
+      `scan_dependencies.py` (ecosystem `RubyGems`). The binary `bun.lockb` is also reported as not scanned.
 - [ ] **Vendor sources for the apps left unchecked (seen).** About 25 installed apps had no source: Discord, NordVPN,
       calibre, Google Drive, OneDrive (beyond MSRC), MarkText, µTorrent, balenaEtcher, TeraCopy, OneCommander,
       CrystalDiskInfo, Token Monitor, VLC, fzf, lazygit, bat, delta, eza, fd, ripgrep, zoxide, the Visual C++
@@ -53,10 +52,9 @@ They are ordered by priority within each section. Items marked **(seen)** came f
       be checked on the first run **(seen)**).
 - [ ] **Repository-only advisories for the AI agent CLIs.** OSV missed two Claude Code advisories that are published
       only on the repository's advisory page (CVE-2026-103435 and CVE-2026-103012, against the bun copy 2.1.27), so
-      they were added to the page by hand **(seen)**. In `scan_ai_clis`, also read
-      `gh api repos/<owner>/<repo>/security-advisories` for anthropics/claude-code, openai/codex and
-      anomalyco/opencode, and match each copy's version against `vulnerable_version_range`. Merge by GHSA ID with
-      the OSV hits, and skip this check, recording it as not scanned, when `gh` is missing or signed out.
+      they were added to the page by hand **(seen)**. `scan_repo_advisories` now does this for PHP, Bun, Composer and
+      pnpm (`REPO_ADVISORIES`). Extend it to anthropics/claude-code, openai/codex and anomalyco/opencode for every
+      CLI copy, and make sure an npm or bun copy that OSV also reports is not listed twice.
 - [ ] **Electron version in Electron apps.** The Electron CA fix (CVE-2026-115570, fixed in 42.11.16, 43.8.1 and
       44.9.1) could not be checked against Claude Desktop, VS Code, Discord, balenaEtcher or MarkText, because the
       inventory does not record which Electron each app ships **(seen)**. Read it from the app's files without

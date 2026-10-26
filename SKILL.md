@@ -2,14 +2,14 @@
 name: win-dev-patch-triage
 description: >
   Read-only security patch triage of a Windows developer workstation. It inventories installed apps,
-  browsers, AI agent apps and CLIs (Claude Desktop, ChatGPT, Claude Code, Codex, OpenCode), language runtimes,
-  global npm/bun/uv tools, Go-built programs, .NET, Go, WSL distros and listening ports; audits every dependency lockfile under one or more projects folders (uv, pip, npm, NuGet, Go, Cargo); checks vendor
-  advisories released in the last N hours (default 24); and publishes a ranked remediation page:
-  Today / This week / Backlog, with a delta against the previous run. Use this skill when the user
-  asks what needs patching or updating on their machine, asks to scan installed packages, runtimes or
-  dev dependencies for vulnerabilities, asks to run, re-run or refresh the workstation scan or patch
-  triage, or wants a security update checklist for their laptop, even if they don't say "triage".
-  Not for deciding on a single Windows KB update, and not for Azure VMs or servers.
+  browsers, AI agent apps and CLIs (Claude, ChatGPT, Codex, OpenCode), runtimes including every Node.js, PHP
+  and Bun copy, global npm/bun/uv tools, Go programs, WSL and listening ports; audits every lockfile under the
+  projects folders (Python, npm, pnpm, yarn, bun, Composer, NuGet, Go, Cargo) for vulnerable and malicious
+  versions; checks advisories from the last N hours (default 24); and publishes a ranked remediation page:
+  Today / This week / Backlog, with a delta against the previous run. Use this skill when the user asks what needs patching or updating on their machine,
+  asks to scan installed packages, runtimes or dev dependencies for vulnerabilities, asks to run, re-run or
+  refresh the workstation scan or patch triage, or wants a security update checklist for their laptop, even if
+  they don't say "triage". Not for deciding on a single Windows KB update, and not for Azure VMs or servers.
 argument-hint: "[window-hours, e.g. 48] [dry-run]"
 compatibility: >
   Claude Code on Windows 11 with PowerShell 7 (pwsh) and uv. Optional: GitHub CLI (gh, signed in),
@@ -17,8 +17,8 @@ compatibility: >
   the Artifact tool; without it the run stays dry.
 license: MIT
 metadata:
-  version: "1.8.0"
-  updated: "2026-10-25"
+  version: "1.9.0"
+  updated: "2026-10-26"
 ---
 
 # Workstation patch triage
@@ -119,6 +119,9 @@ the run again at step 1.
    `ai_clis` holds every copy of `claude`, `codex` and `opencode`, on PATH or in the vendor's install folder, each with
    its version, install method (standalone, winget, npm, bun, scoop, chocolatey), the npm package OSV files its
    advisories under, and the version winget offers when winget manages it.
+   `runtime_copies` holds every copy of Node.js, PHP and Bun: on PATH, off PATH, and the Node versions that
+   nvm-windows, fnm and Volta keep. Each version is read from the file's version resource; no copy is run.
+   `composer_global_lock` is Composer's global lockfile, when there is one.
 
 3. **Start the upstream research in the background** as soon as the inventory exists. Fill
    `references/research-brief.md` from `inventory.json` and `run.json`, and spawn one general-purpose agent with it
@@ -127,9 +130,15 @@ the run again at step 1.
 
 4. **Dependency scans** (about 2 minutes, in parallel with step 3). `uv run "SKILL/scripts/scan_dependencies.py" --run RUN`.
    It runs uv audit, pip-audit (on a resolved copy), npm audit, dotnet list --vulnerable and govulncheck. It checks
-   these against OSV: every package bundled inside global npm and bun installs, the uv tools, the crates in each
-   `Cargo.lock`, the Go standard library and modules compiled into each Go program on PATH, and each AI agent CLI copy
-   installed outside npm and bun (matched by its version under its npm package name). The Go check reads the build
+   these against OSV: every package in each `Cargo.lock`, `composer.lock`, `package-lock.json`, `pnpm-lock.yaml`,
+   `yarn.lock` and `bun.lock` (and the global Composer lockfile), every package bundled inside global npm and bun
+   installs and inside each Node.js copy (its npm and corepack), the uv tools, the Go standard library and modules
+   compiled into each Go program on PATH, and each AI agent CLI copy installed outside npm and bun (matched by its
+   version under its npm package name). OSV also lists malicious package versions, under `MAL-` IDs.
+   It checks each Node.js and PHP copy against the vendor's release feed (nodejs.org and php.net), which marks every
+   security release and gives each line's end of support, and each PHP, Bun, Composer and pnpm copy against the
+   security advisories on the vendor's GitHub repository, which OSV may not carry (it had none of Bun's).
+   Every package version it checked, and where it was found, goes into `RUN/deps/package_index.json`. The Go check reads the build
    info from the file and never runs the program. Projects under `untrusted_projects` get no .NET or Go
    scan and no resolution of a manifest that has no lockfile. A solution or Go module whose folder contains an
    untrusted folder is skipped too.
@@ -146,6 +155,9 @@ the run again at step 1.
    - INSTALLED-SOFTWARE CHANGES since the previous run (apps, runtimes, OS, tools, WSL packages);
    - DUPLICATE INSTALLS: apps registered with more than one version, and commands found in several PATH folders,
      marked when a user-writable copy shadows a system one;
+   - MALICIOUS PACKAGES: installed versions that OSV or GitHub lists as malware;
+   - KNOWN EXPLOITED: findings whose CVE is in the CISA KEV catalog (or a note that the catalog could not be read);
+   - NODE.JS, PHP AND BUN COPIES: every copy with its version and where it came from;
    - AI AGENT APPS AND CLIS: every desktop app and CLI copy with its version and winget's offer;
    - NOT SCANNED;
    - SCAN NOTES.
@@ -170,6 +182,13 @@ the run again at step 1.
    - the AI AGENT APPS AND CLIS section of the digest, with the research rows for each app and copy, judged by the
      AI agent rule in the triage rules. When none of the five tools is installed, say so in one line under Already
      patched, so the reader knows they were looked for;
+   - the MALICIOUS PACKAGES section, and every compromised package version the research reports that OSV has not
+     listed yet: look each name up in `RUN/deps/package_index.json` (ecosystem, then name, then version, then where
+     it was found). Also check the incident's file indicators that the research lists, only with `Test-Path` and
+     `Get-ScheduledTask`, without opening or running anything. Judge a hit by the malicious-package rule in the
+     triage rules;
+   - the NODE.JS, PHP AND BUN COPIES section, with the `runtime` rows above it and the research rows. A copy that a
+     web server, IDE or build runs (XAMPP, Laragon, an nvm version) is as exposed as the one on PATH;
    - `raw/dotnet-sdk-check.txt` for out-of-support .NET versions. It is Microsoft's own status, so cite it, and record a
      conflict if the research says otherwise;
    - Dockerfile base images (`RUN/deps/dockerfiles.json`), noted as not scanned if Docker is not running.
@@ -243,6 +262,23 @@ the run again at step 1.
   notes for the Claude or ChatGPT desktop app. CVEs come from NVD and GitHub advisories, and the newest build often
   only from winget. Say that on the page rather than calling the app current. The ChatGPT app's MSIX package is named
   `OpenAI.Codex`; the inventory lists it as ChatGPT.
+- **Node.js, PHP and Bun copies are judged from vendor data, in two ways.** The release feeds give one finding per
+  copy ("N security releases on this line since your version", or "this line is out of support") without CVE IDs or
+  severity; take those from the vendor's release notes in the research. The GitHub repository advisories give CVEs and
+  severity. PHP files one advisory entry per release line, with only an upper bound (`< 8.3.36`), so an entry counts
+  only for a version on its own line. A line older than every line an advisory lists is therefore not matched: for
+  PHP that is an out-of-support line, which gets the end-of-life finding instead.
+- **Bun's advisories are not in OSV.** Bun publishes them only on its GitHub repository, and its release blog names no
+  CVE or advisory IDs. Programs built with `bun build --compile` embed the Bun runtime they were built with and must
+  be rebuilt after a Bun security release; the inventory cannot tell which programs those are, so say so under Limits
+  when Bun has a security release.
+- **PHP's exposure depends on how it runs.** A PHP copy that a local web server runs (Apache with mod_php, PHP-FPM,
+  XAMPP, Laragon) handles network input; the CLI copy used only by Composer does not. Ask about or look for a running
+  web server before choosing the band, and say what would move the item.
+- **Malicious packages are found two ways.** OSV lists most within hours under `MAL-` IDs, and npm audit reports
+  GitHub's malware advisories. In the first hours of an incident neither may have it yet, which is why the research
+  reports compromised versions and the triage looks them up in `package_index.json`. A malicious version in a
+  lockfile was installed whenever someone ran an install there; one only in a global tree is installed now.
 - **Docker images are not scanned** when the engine is stopped. Say so rather than skipping it silently.
 - **WSL distros that are not apt-based** (Fedora, openSUSE, Alpine, Arch) are listed with their package manager and
   no key packages. Say under Limits that they were not inventoried. When WSL is not installed, `inventory.wsl` is empty.

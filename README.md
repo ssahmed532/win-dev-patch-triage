@@ -7,9 +7,11 @@ It checks:
 - installed apps and browsers (winget, plus file versions for apps winget does not track)
 - AI agent apps and CLIs: the Claude and ChatGPT desktop apps, and every copy of Claude Code, Codex and OpenCode (native, winget, npm or bun), with the CLIs checked against OSV
 - language runtimes and toolchains: Node.js, CPython via uv, .NET, Go, PowerShell, Git and others on PATH, plus PHP, Java or Ruby found off PATH
-- global npm, bun and uv tools, including the libraries bundled inside them (via OSV)
+- every copy of Node.js, PHP and Bun (on PATH, off PATH, and the Node versions nvm-windows, fnm and Volta keep), checked against the vendors' release feeds (security releases and end of support) and, for PHP and Bun, the advisories on their GitHub repositories; Composer and pnpm are checked against theirs too
+- global npm, bun and uv tools, and the npm that ships with each Node.js copy, including the libraries bundled inside them (via OSV)
 - Go-built programs on PATH (gh, lazygit, fzf, ...): the Go version and modules compiled into each, read from the file and checked against OSV
-- every dependency lockfile under one or more projects folders: uv, pip/requirements, npm, NuGet, Go and Cargo
+- every dependency lockfile under one or more projects folders: uv, pip/requirements, npm, pnpm, yarn, bun, Composer, NuGet, Go and Cargo
+- malicious package versions (OSV's `MAL-` records and GitHub's malware advisories), and CVEs in CISA's Known Exploited Vulnerabilities catalog
 - old copies left installed next to new ones, and commands whose copy in a user folder shadows the system copy
 - WSL distros (key package versions and how stale the apt lists are), listening ports, and the OS patch level
 - vendor advisories released in the last N hours (24 by default)
@@ -23,7 +25,7 @@ The workflow and its rules are in [SKILL.md](SKILL.md). The triage rules are in 
 | Windows 11, PowerShell 7 (`pwsh`) | PowerShell 7.4 (tested with 7.5) | the inventory script |
 | [uv](https://docs.astral.sh/uv/) | a uv that has `uv audit` (0.13 or newer; tested with 0.13.5). The setup step checks for it and stops with an upgrade message if it is missing | runs the Python scripts and the Python audits (`uv audit`, `uvx pip-audit`) |
 | Node.js / npm | any current LTS (tested with Node 24) | `npm audit` and global package checks |
-| GitHub CLI (`gh`), signed in | any | advisory severity and publish dates from the GitHub Advisory Database. Without it, the scripts fall back to OSV |
+| GitHub CLI (`gh`), signed in | any | advisory severity and publish dates from the GitHub Advisory Database, and the PHP, Bun, Composer and pnpm repository advisories. Without it, the scripts fall back to OSV, and read the repository advisories through GitHub's unauthenticated API (60 requests an hour) |
 | .NET SDK | 9.0.300 or newer, the first with `dotnet list package --vulnerable` (tested with 10.0.402). Older SDKs are noted at setup and .NET projects are not audited | only if projects use .NET |
 | Go | any supported release | only if projects use Go; `govulncheck`. Not needed for checking Go-built programs |
 | Claude Code | tested with 2.1.308. Needs background agents; the PowerShell tool is used when present, otherwise Bash | running the skill |
@@ -142,8 +144,13 @@ so a repo's `go.mod` cannot make Go download and run a different toolchain.
 ## What leaves your machine
 
 - **Package names and versions** of your dependencies go to OSV (`api.osv.dev`) for the global npm, bun and uv tools,
-  the crates in each `Cargo.lock`, the Go modules compiled into programs on PATH, and the versions of the AI agent CLIs, and to the advisory sources behind `uv audit`, `pip-audit`, `npm audit`, `dotnet list package --vulnerable` and
-  `govulncheck` for your projects. Advisory IDs go to the GitHub Advisory Database through `gh` when it is signed in.
+  the npm bundled with Node.js, every package in your Cargo, Composer, npm, pnpm, yarn and bun lockfiles, the Go
+  modules compiled into programs on PATH, and the versions of the AI agent CLIs, and to the advisory sources behind
+  `uv audit`, `pip-audit`, `npm audit`, `dotnet list package --vulnerable` and `govulncheck` for your projects.
+  Advisory IDs go to the GitHub Advisory Database through `gh` when it is signed in.
+- **Public feeds are downloaded**, with nothing about the machine in the request: the Node.js release index and
+  schedule, php.net's release and support data for the installed PHP lines, the security advisories of the PHP, Bun,
+  Composer and pnpm repositories on GitHub, and CISA's KEV catalog.
 - **Product names and versions** of installed software go into the research agent's web fetches and web searches,
   and the vendor pages it reads see those requests.
 - **The published page** carries your OS edition and build, installed app and runtime versions, the names of your

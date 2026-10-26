@@ -43,7 +43,7 @@ $probes = [ordered]@{
     rustc = { rustc --version }; java = { java -version }; docker = { docker --version }
     az = { 'azure-cli ' + (az version 2>$null | ConvertFrom-Json).'azure-cli' }; terraform = { terraform version }
     kubectl = { kubectl version --client }; helm = { helm version --short }; code = { code --version }
-    php = { php --version }; ruby = { ruby --version }; claude = { claude --version }
+    php = { php --version }; composer = { composer --version }; ruby = { ruby --version }; claude = { claude --version }
 }
 # Every folder on PATH that holds the command, in PATH order. A copy in a user-writable folder that comes before one in
 # Program Files or Windows shadows it: whatever can write to the user folder decides what runs.
@@ -75,6 +75,8 @@ if (Get-Command npm -ErrorAction SilentlyContinue) {
 Save-Raw 'bun-global.txt' (bun pm ls -g 2>&1)
 $bunHome = if ($env:BUN_INSTALL) { $env:BUN_INSTALL } else { Join-Path $env:USERPROFILE '.bun' }
 $inv.bun_global_root = Join-Path $bunHome 'install\global\node_modules'
+$composerLock = Join-Path $(if ($env:COMPOSER_HOME) { $env:COMPOSER_HOME } else { "$env:APPDATA\Composer" }) 'composer.lock'
+$inv.composer_global_lock = $(if (Test-Path $composerLock) { $composerLock } else { $null })
 Save-Raw 'uv-python.txt' (uv python list --only-installed 2>&1)
 Save-Raw 'uv-tools.txt'  (uv tool list --show-version-specifiers 2>&1)
 $inv.uv_tools = @(foreach ($l in (uv tool list 2>$null)) { if ($l -match '^(\S+) v(\S+)') { @{ name = $Matches[1]; version = $Matches[2] } } })
@@ -181,6 +183,31 @@ $inv.off_path_runtimes = @(foreach ($r in $roots) {
             Select-Object -ExpandProperty FullName
     })
 
+# --- every copy of Node.js, PHP and Bun: on PATH, off PATH, and the Node versions nvm-windows, fnm and Volta keep. Each copy
+# is patched on its own and an old one stays exploitable. The version comes from the file's version resource; nothing is run.
+$nodeManagerDirs = @($env:NVM_HOME, $env:FNM_DIR, "$env:APPDATA\fnm", "$env:LOCALAPPDATA\fnm", "$env:LOCALAPPDATA\Volta\tools\image\node") |
+    Where-Object { $_ -and (Test-Path $_) }
+$copyPaths = [ordered]@{
+    node = @(($inv.runtimes | Where-Object name -eq 'node').all_paths) +
+        @($nodeManagerDirs | ForEach-Object { Get-ChildItem $_ -Recurse -Depth 4 -File -Filter node.exe -ErrorAction SilentlyContinue | ForEach-Object FullName })
+    php  = @(($inv.runtimes | Where-Object name -eq 'php').all_paths) + @($inv.off_path_runtimes | Where-Object { $_ -match '\\php\.exe$' })
+    bun  = @(($inv.runtimes | Where-Object name -eq 'bun').all_paths) + @(Join-Path $bunHome 'bin\bun.exe')
+}
+$inv.runtime_copies = @(foreach ($k in $copyPaths.Keys) {
+        $seen = @{}  # nvm-windows puts a folder link on PATH: one entry per real file
+        foreach ($p in $copyPaths[$k]) {
+            if (-not $p -or $p -notmatch '\.exe$' -or -not (Test-Path $p -PathType Leaf)) { continue }
+            $onPath = ($inv.runtimes | Where-Object name -eq $k).all_paths -contains $p
+            $f = [IO.File]::ResolveLinkTarget($p, $true); if ($f) { $p = $f.FullName }
+            $d = [IO.Directory]::ResolveLinkTarget((Split-Path $p -Parent), $true); if ($d) { $p = Join-Path $d.FullName (Split-Path $p -Leaf) }
+            if ($seen[$p.ToLower()]) { continue }
+            $seen[$p.ToLower()] = $true
+            $source = if ($p -match '\\(nvm|fnm|Volta)\\') { $Matches[1].ToLower() } elseif ($onPath) { 'PATH' }
+            elseif ($p -match '\\\.bun\\') { 'bun installer' } else { 'off PATH' }
+            [ordered]@{ name = $k; path = $p; version = (Get-Item $p).VersionInfo.ProductVersion; source = $source }
+        }
+    })
+
 # --- WSL: package manager per distro; key packages and apt staleness for apt-based ones. docker-desktop is Docker's own VM, skipped.
 $keyPkgs = 'openssl|libssl3t64|libssl3|ca-certificates|libnss3|python3|nodejs|php\S*|golang\S*|openssh-server|openssh-client|curl|git|sudo|bash'
 $distros = @()
@@ -230,4 +257,4 @@ $inv.manifests = @($(foreach ($root in @($run.projects_roots | Where-Object { Te
     }) | Sort-Object)
 
 $inv | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $RunDir 'inventory.json') -Encoding utf8
-"inventory: $(@($inv.runtimes | Where-Object version).Count) runtimes, $(@($inv.ai_apps).Count) AI apps, $(@($inv.ai_clis).Count) AI CLI copies, $($inv.manifests.Count) manifests, $(@($inv.wsl).Count) WSL distros, $(@($inv.listening | Where-Object risky).Count) risky listening ports"
+"inventory: $(@($inv.runtimes | Where-Object version).Count) runtimes, $(@($inv.runtime_copies).Count) Node/PHP/Bun copies, $(@($inv.ai_apps).Count) AI apps, $(@($inv.ai_clis).Count) AI CLI copies, $($inv.manifests.Count) manifests, $(@($inv.wsl).Count) WSL distros, $(@($inv.listening | Where-Object risky).Count) risky listening ports"

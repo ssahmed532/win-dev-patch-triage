@@ -8,7 +8,12 @@ The aim is a list someone can work top to bottom without having to re-sort it.
 Decide an item's band by working down this list. Stop at the first rule that matches.
 
 **Priority 1 · Today**
-1. It is exploited in the wild (CISA KEV, or the vendor says so).
+0. A malicious package version is installed (the digest's MALICIOUS PACKAGES section, or a compromised version from
+   the research found in `package_index.json`). It goes first on the page, above every other item. See Malicious
+   packages below.
+1. It is exploited in the wild: the digest's KNOWN EXPLOITED section (CISA KEV), or the vendor or a security
+   research report the research cites says so. KEV often lags exploitation by days, so a research report of
+   exploitation is enough; name the source and say that KEV does not list it yet.
 2. It is a browser, OS component, runtime or toolchain, or anything else that handles untrusted network input or files on this machine, and it is Critical, or it is High and published in the window.
 3. A browser has no patch yet for a Chromium or Firefox security release. Report it with the mitigation.
 4. It is unpatchable (no fixed version will ship, for example an obsolete branch) and has a High or Critical advisory. The action is to remove it.
@@ -45,6 +50,30 @@ runs is to uninstall it. A desktop app that is only behind winget's offered vers
 say that no advisory was found.
 
 Software that IT manages, such as a VPN client or EDR agent, gets the band its severity and exposure call for. The action is "ask IT to update to <version>".
+
+## Malicious packages
+
+A malicious version means the machine may already be compromised, not only that something needs updating:
+- Say where it was found (the project lockfile or global install) and whether it is installed now: a version in a
+  global tree is installed; a version in a lockfile was installed wherever someone ran an install in that project.
+- The action is to stop and report it to the organisation's security team before changing anything, then remove the
+  package and reinstall from a clean lockfile. Credentials on the machine (npm, GitHub and cloud tokens, SSH keys)
+  should be treated as exposed. Follow the order of steps in the vendor's or researcher's advisory: some worms
+  delete data when a stolen token is revoked before their persistence is removed.
+- Name the advisory and the indicators the research reported, and say which of them were checked and what was found.
+
+## Node.js, PHP and Bun copies
+
+- Each copy in NODE.JS, PHP AND BUN COPIES is its own item when it is vulnerable, with its path and where it came
+  from (PATH, off PATH, nvm, fnm, Volta). An old version kept by a version manager is an old copy under the
+  duplicate rules below; the action is to uninstall that version from the manager, or to update it.
+- A `runtime` row from a release feed ("N security releases since ...") has no severity or CVE of its own: take them
+  from the vendor's release notes in the research. If the research has none, write "not stated" and band it by the
+  rules above, treating the runtime as handling untrusted input.
+- An out-of-support Node.js or PHP line is This week (rule 4), unless an advisory for a supported line is exploited
+  and the vendor says older lines are affected too; then it is Today.
+- PHP that a local web server runs (mod_php, PHP-FPM, XAMPP, Laragon) handles network input. PHP used only as a CLI,
+  for example by Composer, handles the files of the projects it runs in.
 
 ## Listening ports
 

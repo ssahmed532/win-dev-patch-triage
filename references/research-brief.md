@@ -38,6 +38,8 @@ Installed:
 - AI agent CLIs, every copy: <inventory.ai_clis: name, version, method and path, and winget_available when set>
 - WSL <distro>: apt lists last refreshed <date>; <key packages>
 - Off-PATH runtimes found: <list or "none">
+- Node.js, PHP and Bun, every copy: <inventory.runtime_copies: name, version, source and path>
+- Composer and pnpm: <their versions from inventory.runtimes, or "not installed">
 
 Also check:
 - Critical or RCE security releases in the window for any developer tool or runtime not listed above.
@@ -47,7 +49,15 @@ Also check:
 - For each AI agent app and CLI above, any security advisory at all, of any date, that the installed version is
   behind. Report each CLI copy on its own row, since copies are updated separately. For the desktop apps, say whether
   the latest version came from the vendor or only from winget.
+- For each Node.js, PHP and Bun copy above: the CVEs and severities of every security release since its version
+  (from the vendor's release notes), whether end-of-life lines are affected, any flaw announced but not fixed yet
+  with its mitigation, and any report that a flaw is exploited in the wild (who says so, and since when).
+- Supply-chain incidents in the window on npm and Packagist: hijacked or malicious package versions, and worms.
+  For each, give the package names and exact versions, the date, and the indicators a read-only check can look
+  for (file paths, scheduled task names, lifecycle scripts), plus any order of response steps the advisory gives.
+  Use the discovery sources in vendor-sources.md to find them, including searches that return x.com, reddit.com
+  and Hacker News results, and confirm each one on GitHub's advisories, OSV or the researcher's own post.
 
 Reply with one compact table: product | installed | latest | security release in window (Y/N, CVEs, severity,
-date) | behind any security release? | source URL. Then add two short lists: what you could not verify, and the
-conflicts between sources.
+date) | behind any security release? | source URL. Then add three short lists: compromised package versions and their indicators (or "none
+found"), what you could not verify, and the conflicts between sources.

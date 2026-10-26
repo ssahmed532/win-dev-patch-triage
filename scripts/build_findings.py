@@ -25,6 +25,9 @@ sys.dont_write_bytecode = True  # the skill folder may be read-only or replaced 
 from skill_version import SKILL_VERSION  # noqa: E402
 
 RANK = {"critical": 4, "high": 3, "moderate": 2, "low": 1, "unknown": 0}
+# IDs an advisory database can look up; the release-feed findings use made-up IDs such as node-26.12.1-security-release
+ADVISORY_ID = re.compile(r"(GHSA|CVE|PYSEC|GO|RUSTSEC|MAL|OSV)-")
+KEV_FEED = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 
 
 def norm_sev(s):
@@ -81,7 +84,7 @@ class Advisories:
             return None
         cvss = (a.get("cvss_severities") or {})
         score = ((cvss.get("cvss_v4") or {}).get("score") or (cvss.get("cvss_v3") or {}).get("score") or None)
-        return {"severity": norm_sev(a.get("severity")), "cvss": score, "published": a.get("published_at"),
+        return {"severity": norm_sev(a.get("severity")), "cvss": score, "published": a.get("published_at"), "type": a.get("type"),
                 "cve": a.get("cve_id"), "summary": a.get("summary"), "url": a.get("html_url"),
                 "patched": [{"package": (v.get("package") or {}).get("name"), "fixed": v.get("first_patched_version")}
                             for v in a.get("vulnerabilities") or []]}
@@ -177,7 +180,7 @@ def from_go(doc, project):
                    "scope_note": GO_SCOPE.get(v.get("scope"), v.get("scope"))}
 
 
-OSV_ECOSYSTEMS = {"npm": "npm", "PyPI": "pypi", "crates.io": "cargo", "Go": "go"}
+OSV_ECOSYSTEMS = {"npm": "npm", "PyPI": "pypi", "crates.io": "cargo", "Go": "go", "Packagist": "composer"}
 
 
 def from_osv_hits(doc, label, project=None):
@@ -193,6 +196,24 @@ def from_osv_hits(doc, label, project=None):
                    "title": o.get("summary"), "severity": (o.get("database_specific") or {}).get("severity"),
                    "published": o.get("published"), "fixed_candidates": fixed,
                    "scope_note": doc.get("scope_note", "bundled in a global install")}
+
+
+def from_runtime(doc):
+    """Node.js, PHP, Bun, Composer and pnpm copies: vendor release-feed hits and GitHub repository advisories."""
+    for h in doc.get("hits", []):
+        yield {"ecosystem": "runtime", "project": f"{h['product']}: {h['copy']}", "package": h["product"],
+               "installed": h["installed"], "ids": h["ids"], "title": h.get("title"), "severity": h.get("severity"),
+               "cvss": h.get("cvss"), "published": h.get("published"), "fixed_candidates": h.get("fixed") or [],
+               "url": h.get("url")}
+
+
+def kev_catalog():
+    """{CVE: date added} from CISA's Known Exploited Vulnerabilities catalog, or None when it cannot be read."""
+    try:
+        with urllib.request.urlopen(KEV_FEED, timeout=120) as r:
+            return {v["cveID"]: v["dateAdded"] for v in json.load(r)["vulnerabilities"]}
+    except Exception:
+        return None
 
 
 def inventory_delta(old, new):
@@ -224,6 +245,8 @@ def inventory_delta(old, new):
             d[f"dotnet sdk {line.split(' [')[0]}"] = "installed"
         for c in inv.get("ai_clis") or []:
             d[f"ai cli {c['name']} ({c['method']}) {c['path']}"] = c.get("version")
+        for c in inv.get("runtime_copies") or []:
+            d[f"{c['name']} copy {c['path']}"] = c.get("version")
         for p in inv.get("ai_apps") or []:
             d[f"ai app {p['name']} ({p['source']})"] = p.get("version")
         for w in inv.get("wsl") or []:
@@ -274,25 +297,32 @@ def main():
             raw += from_dotnet(doc, roots)
         elif kind == "govulncheck":
             raw += from_go(doc, project)
-        elif kind == "osv-cargo":
+        elif kind == "osv-lockfile":
             raw += from_osv_hits(doc, kind[4:], project)
         elif kind.startswith("osv-"):
             raw += from_osv_hits(doc, kind[4:])
+        elif kind in ("runtime-releases", "repo-advisories"):
+            raw += from_runtime(doc)
+
+    def lookup_id(ids):
+        ids = [i for i in ids if i]
+        return next((i for i in ids if i.startswith("GHSA-")), ids[0] if ids and ADVISORY_ID.match(ids[0]) else None)
 
     adv = Advisories(os.path.join(run_dir, "advisories_cache.json"))
     prev_cache = os.path.join(cfg.get("previous_run") or "", "advisories_cache.json")
     if cfg.get("previous_run") and os.path.exists(prev_cache):  # advisories rarely change; saves most of the lookups
         adv.cache = {**load(prev_cache), **adv.cache}
-    adv.prefetch(next((i for i in r["ids"] if i and i.startswith("GHSA-")), r["ids"][0]) for r in raw if r["ids"])
+    adv.prefetch(lookup_id(r["ids"]) for r in raw)
+    kev = kev_catalog()
 
     findings = {}
     for r in raw:
         ids = [i for i in r["ids"] if i]
-        lookup = next((i for i in ids if i.startswith("GHSA-")), ids[0] if ids else None)
+        lookup = lookup_id(ids)
         info = adv.get(lookup) if lookup else None
         info = info or {}
         cve = next((i for i in ids if i.startswith("CVE-")), None) or info.get("cve")
-        key_id = cve or lookup
+        key_id = cve or lookup or (ids[0] if ids else None)  # a release-feed finding has its own ID
         patched = [p["fixed"] for p in info.get("patched", []) if p.get("fixed") and p.get("package") in (None, r["package"])]
         # for a bare range such as "8.0.0 - 8.1.5", its upper bound stands in for the installed version
         installed = r.get("installed") or ""
@@ -306,11 +336,15 @@ def main():
             "cvss": r.get("cvss") or info.get("cvss"), "title": r.get("title") or info.get("summary"),
             "published": r.get("published") or info.get("published"), "fixed": fix or r.get("fix_note"),
             "url": info.get("url") or r.get("url"), "scope_note": r.get("scope_note"),
+            # an installed malicious version: OSV lists those under MAL- IDs, GitHub as advisories of type malware
+            "malicious": any(i.startswith("MAL-") for i in ids) or info.get("type") == "malware",
+            "kev": next((kev[i] for i in ids + [cve] if i in (kev or {})), None),  # date CISA added it to KEV
         }
         k = "|".join([f["ecosystem"], f["project"], f["package"], str(f["installed"]), str(key_id)])
         old = findings.get(k)
         if old:  # two records (GHSA and PYSEC) for the same flaw: keep the worse severity and the earlier date
             old["severity"] = max(f["severity"], old["severity"], key=RANK.get)
+            old["malicious"], old["kev"] = old["malicious"] or f["malicious"], old["kev"] or f["kev"]
             if f["published"] and (not old["published"] or f["published"] < old["published"]):
                 old["published"] = f["published"]
         else:
@@ -332,7 +366,7 @@ def main():
 
     out = {"skill_version": SKILL_VERSION, "generated_from": run_dir, "since_utc": cfg["since_utc"],
            "findings": sorted(findings.values(), key=lambda x: (-RANK[x["severity"]], x["project"], x["package"])),
-           "resolved_since_previous": resolved, "not_scanned": [s for s in status if not s["ok"]]}
+           "resolved_since_previous": resolved, "not_scanned": [s for s in status if not s["ok"]], "kev_checked": kev is not None}
     with open(os.path.join(run_dir, "findings.json"), "w", encoding="utf-8") as f:
         json.dump(out, f, indent=1)
 
@@ -378,16 +412,22 @@ def main():
     def listing(title, items):
         print(f"\n{title}")
         for f in items:
-            print(f"  {f['severity']:<9}{f['ecosystem']:<6}{f['project']} | {f['package']} {f['installed']} -> {f['fixed']} | "
+            print(f"  {f['severity']:<9}{f['ecosystem']:<9}{f['project']} | {f['package']} {f['installed']} -> {f['fixed']} | "
                   f"{f['advisory']}{' CVSS ' + str(f['cvss']) if f['cvss'] else ''} | {local(f['published'])} | {(f['title'] or '')[:90]}")
     listing(f"IN WINDOW (published since {local(cfg['since_utc'])})", [f for f in fl if f["in_window"]])
     listing("LAST 72 HOURS, outside the window (High and Critical)",
             [f for f in fl if f["recent"] and not f["in_window"] and RANK[f["severity"]] >= 3])
+    listing("MALICIOUS PACKAGES (an installed version listed as malware: a possible compromise of this machine)",
+            [f for f in fl if f["malicious"]])
+    if kev is None:
+        print(f"\nKNOWN EXPLOITED: the CISA KEV catalog could not be read ({KEV_FEED}); exploitation status comes from the research only")
+    else:
+        listing("KNOWN EXPLOITED (in the CISA KEV catalog)", [f for f in fl if f["kev"]])
 
     if resolved:
         print("\nRESOLVED SINCE PREVIOUS RUN")
         for f in resolved:
-            print(f"  {f['ecosystem']:<6}{f['project']} | {f['package']} {f['installed']} | {f['advisory']}")
+            print(f"  {f['ecosystem']:<9}{f['project']} | {f['package']} {f['installed']} | {f['advisory']}")
 
     # machine-level changes (apps, runtimes, OS) are not findings, so compare the two inventories directly
     if cfg.get("previous_run") and os.path.exists(os.path.join(cfg["previous_run"], "inventory.json")):
@@ -407,6 +447,12 @@ def main():
         for r in dup_cmds:
             flag = "  [SHADOWS A SYSTEM COPY: a user-writable folder comes first on PATH]" if r.get("shadows_system_copy") else ""
             print(f"  command  {r['name']}: {' | '.join(r['all_paths'])} (the first one runs){flag}")
+
+    copies = inv.get("runtime_copies") or []
+    if copies:
+        print("\nNODE.JS, PHP AND BUN COPIES (each is updated on its own; findings are in the rows above, under runtime)")
+        for c in copies:
+            print(f"  {c['name']:<5}{c.get('version') or 'version not read'} ({c['source']}) {c['path']}")
 
     # the desktop apps have no advisory feed a scanner can query, so the research agent checks them against the vendor;
     # winget's offer is a hint that a newer build exists, not proof that the installed one is vulnerable
