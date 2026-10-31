@@ -348,11 +348,16 @@ def scan_ai_clis(inv, deps):
 
 # ---------- lockfiles checked against OSV: the (name, version) pairs are read from the file; nothing is installed or run ----------
 
+# the exact `source` Cargo writes for a crates.io crate (git index, sparse index). A substring test would also
+# accept another registry whose URL merely contains "crates.io", and check its crates against the wrong advisories.
+CRATES_IO_SOURCES = {"registry+https://github.com/rust-lang/crates.io-index", "sparse+https://index.crates.io/"}
+
+
 def parse_cargo(path):
     """crates.io crates only: path and git dependencies, and crates from other registries, are not in OSV."""
     with open(path, "rb") as f:
         lock = tomllib.load(f)
-    return {(p["name"], p["version"]) for p in lock.get("package", []) if "crates.io" in str(p.get("source", ""))}
+    return {(p["name"], p["version"]) for p in lock.get("package", []) if p.get("source") in CRATES_IO_SOURCES}
 
 
 def parse_composer(path):
