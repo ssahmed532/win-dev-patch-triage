@@ -1,7 +1,7 @@
 # TODO: making the skill reusable across Windows 11 machines
 
-Improvements found during the first runs on THINKPAD-E15 (v1.5 to v1.7.1, 23 October 2026, and v1.8.0, 25 October
-2026), and not done yet.
+Improvements found during the first runs (v1.5 to v1.7.1, 23 October 2026, and v1.8.0, 25 October 2026), and not
+done yet.
 They are ordered by priority within each section. Items marked **(seen)** came from a real run, not from analysis.
 
 ## 1. Machines other than this laptop
@@ -34,11 +34,9 @@ They are ordered by priority within each section. Items marked **(seen)** came f
 
 - [ ] **Gemfile.lock through OSV.** It is reported as not scanned. Add a parser to `LOCKFILES` in
       `scan_dependencies.py` (ecosystem `RubyGems`). The binary `bun.lockb` is also reported as not scanned.
-- [ ] **Vendor sources for the apps left unchecked (seen).** About 25 installed apps had no source: Discord, NordVPN,
-      calibre, Google Drive, OneDrive (beyond MSRC), MarkText, µTorrent, balenaEtcher, TeraCopy, OneCommander,
-      CrystalDiskInfo, Token Monitor, VLC, fzf, lazygit, bat, delta, eza, fd, ripgrep, zoxide, the Visual C++
-      redistributables and the Visual Studio Installer. Add the ones that publish security notes, and list the rest
-      under Limits automatically.
+- [ ] **Vendor sources for the apps left unchecked (seen).** About 25 installed apps, desktop apps and command-line
+      tools alike, had no source. Add the ones that publish security notes, and list the rest under Limits
+      automatically.
 - [ ] **Docker images.** Scan local images with an SBOM/vulnerability tool when the engine is running, and check the
       `FROM` lines in Dockerfiles against the base images' advisories.
 - [ ] **Non-apt WSL distros.** Inventory Fedora, openSUSE, Alpine and Arch packages (rpm, apk, pacman) and check
@@ -56,10 +54,10 @@ They are ordered by priority within each section. Items marked **(seen)** came f
       pnpm (`REPO_ADVISORIES`). Extend it to anthropics/claude-code, openai/codex and anomalyco/opencode for every
       CLI copy, and make sure an npm or bun copy that OSV also reports is not listed twice.
 - [ ] **Electron version in Electron apps.** The Electron CA fix (CVE-2026-115570, fixed in 42.11.16, 43.8.1 and
-      44.9.1) could not be checked against Claude Desktop, VS Code, Discord, balenaEtcher or MarkText, because the
-      inventory does not record which Electron each app ships **(seen)**. Read it from the app's files without
-      running the app (for example the Electron version string embedded in the main executable or `resources`), and
-      check it against OSV under the npm package `electron`, as the Go check does for Go programs.
+      44.9.1) could not be checked against any of the installed Electron apps, because the inventory does not record
+      which Electron each app ships **(seen)**. Read it from the app's files without running the app (for example the
+      Electron version string embedded in the main executable or `resources`), and check it against OSV under the npm
+      package `electron`, as the Go check does for Go programs.
 - [ ] **Browser extensions.** List Chrome, Edge and Firefox extensions with their versions; they handle untrusted
       content with the browser's privileges.
 
