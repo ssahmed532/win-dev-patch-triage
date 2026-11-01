@@ -3,7 +3,7 @@ name: win-dev-patch-triage
 description: >
   Read-only security patch triage of a Windows developer workstation. It inventories installed apps,
   browsers, AI agent apps and CLIs (Claude, ChatGPT, Codex, OpenCode), runtimes including every Node.js, PHP
-  and Bun copy, global npm/bun/uv tools, Go programs, WSL and listening ports; audits every lockfile under the
+  and Bun copy, every pip copy, global npm/bun/uv tools, Go programs, WSL and listening ports; audits every lockfile under the
   projects folders (Python, npm, pnpm, yarn, bun, Composer, NuGet, Go, Cargo) for vulnerable and malicious
   versions; checks advisories from the last N hours (default 24); and publishes a ranked remediation page:
   Today / This week / Backlog, with a delta against the previous run. Use this skill when the user asks what needs patching or updating on their machine,
@@ -17,8 +17,8 @@ compatibility: >
   the Artifact tool; without it the run stays dry.
 license: MIT
 metadata:
-  version: "1.9.1"
-  updated: "2026-10-31"
+  version: "1.10.0"
+  updated: "2026-11-01"
 ---
 
 # Workstation patch triage
@@ -132,7 +132,8 @@ the run again at step 1.
    It runs uv audit, pip-audit (on a resolved copy), npm audit, dotnet list --vulnerable and govulncheck. It checks
    these against OSV: every package in each `Cargo.lock`, `composer.lock`, `package-lock.json`, `pnpm-lock.yaml`,
    `yarn.lock` and `bun.lock` (and the global Composer lockfile), every package bundled inside global npm and bun
-   installs and inside each Node.js copy (its npm and corepack), the uv tools, the Go standard library and modules
+   installs and inside each Node.js copy (its npm and corepack), the uv tools, the pip in every Python install and
+   user site (`pip_copies` in the inventory), the Go standard library and modules
    compiled into each Go program on PATH, and each AI agent CLI copy installed outside npm and bun (matched by its
    version under its npm package name). OSV also lists malicious package versions, under `MAL-` IDs.
    It checks each Node.js and PHP copy against the vendor's release feed (nodejs.org and php.net), which marks every

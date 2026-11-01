@@ -14,7 +14,7 @@ projects themselves are not touched.
 The .NET and Go scans evaluate a project's build files, which can run code from the repo; folders listed in
 untrusted_projects are skipped, and Go never downloads the toolchain a go.mod asks for (GOTOOLCHAIN=local).
 Cargo, Composer, pnpm, yarn, bun and npm lockfiles, the Go programs on PATH (their embedded build info) and the AI agent
-CLIs are checked against OSV. Every Node.js, PHP and Bun copy is checked against the vendor's release feed or the
+CLIs are checked against OSV, and so is the pip in every Python install and user site. Every Node.js, PHP and Bun copy is checked against the vendor's release feed or the
 security advisories on its GitHub repository.
 """
 import argparse
@@ -46,7 +46,7 @@ os.environ.update({"DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1", "DOTNET_GENERATE_AS
 OSV = "https://api.osv.dev/v1"
 # inventory fields that must be JSON lists; PowerShell turns a one-element array into a bare value unless it is wrapped in @()
 LIST_FIELDS = ("runtimes", "python_on_path", "uv_tools", "uv_pythons", "installed_apps", "duplicate_apps", "browsers",
-               "off_path_runtimes", "wsl", "listening", "manifests", "ai_clis", "ai_apps", "runtime_copies")
+               "off_path_runtimes", "wsl", "listening", "manifests", "ai_clis", "ai_apps", "runtime_copies", "pip_copies")
 # Scanner code that is downloaded and executed on every run. Pinned on purpose: bump these with a release, after
 # reading the scanner's release notes, rather than running whatever is newest on the day.
 PIP_AUDIT = "2.10.1"
@@ -323,6 +323,18 @@ def scan_globals(inv, deps):
         record("osv-uv-tools", "uv tool list", True, out, f"{len(tools)} tools checked")
     except Exception as e:
         record("osv-uv-tools", "uv tool list", False, None, repr(e))
+    # pip in each Python install and user site, matched by its dist-info version; scope says whether upgrading it needs
+    # an elevated prompt (system Python) and whether it is the pip on PATH
+    pips = defaultdict(set)
+    for c in inv.get("pip_copies") or []:
+        pips[("pip", c["version"])].add(f"{c['scope']}{', on PATH' if c.get('on_path') else ''} {c['site_packages']}")
+    try:
+        hits = osv_scan(pips, "PyPI", "pip") if pips else []
+        out = save(deps, "osv__pip.json", json.dumps({"ecosystem": "PyPI", "scope_note": "pip in a Python install or user site",
+                                                      "packages_checked": len(pips), "hits": hits}, indent=2))
+        record("osv-pip", "pip copies", True, out, f"{sum(len(w) for w in pips.values())} copies checked")
+    except Exception as e:
+        record("osv-pip", "pip copies", False, None, repr(e))
 
 
 def scan_ai_clis(inv, deps):

@@ -247,6 +247,8 @@ def inventory_delta(old, new):
             d[f"ai cli {c['name']} ({c['method']}) {c['path']}"] = c.get("version")
         for c in inv.get("runtime_copies") or []:
             d[f"{c['name']} copy {c['path']}"] = c.get("version")
+        for c in inv.get("pip_copies") or []:
+            d[f"pip ({c['scope']}) {c['site_packages']}"] = c.get("version")
         for p in inv.get("ai_apps") or []:
             d[f"ai app {p['name']} ({p['source']})"] = p.get("version")
         for w in inv.get("wsl") or []:

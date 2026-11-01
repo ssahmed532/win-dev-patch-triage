@@ -75,6 +75,22 @@ A malicious version means the machine may already be compromised, not only that 
 - PHP that a local web server runs (mod_php, PHP-FPM, XAMPP, Laragon) handles network input. PHP used only as a CLI,
   for example by Composer, handles the files of the projects it runs in.
 
+## pip copies
+
+- Each vulnerable pip copy (`pip: <scope> <site-packages>` rows, `pip_copies` in the inventory) is its own item, with
+  its folder and scope. Merge its advisories into one item and give the lowest version that fixes all of them.
+- A copy whose `on_path` is true is the `pip` that runs when the user types `pip`; band it by the rules above. A copy
+  only reached through `python -m pip` with that Python is one band lower, and a uv-managed one is Backlog, since uv
+  installs packages without it.
+- A user-site pip shadows the pip of every Python of the same minor version for that user: `python -m pip` runs the
+  user-site copy. Say so when both are listed, and that upgrading one leaves the other as it is.
+- The action, by scope (each is `pip install --upgrade pip` run by that copy's own Python):
+  - system Python: from an elevated prompt, `"<python_home>\python.exe" -m pip install --upgrade pip`;
+  - per-user Python: the same command, not elevated;
+  - user site (`...\Python\Python3XX\site-packages`): `py -3.XX -m pip install --user --upgrade pip`;
+  - uv-managed Python: `uv python upgrade <minor>`, then say whether the newest build's pip is still vulnerable
+    (the scan of the next run shows it); do not run pip inside a uv-managed Python.
+
 ## Listening ports
 
 `inventory.listening[]` flags ports from the config's `risky_ports` list. A flag is a prompt to look, not a finding:
@@ -119,7 +135,7 @@ The digest lists one row per project, package and version. Merge rows so the pag
 - Release date of the fix or advisory, in the configured time zone.
 - One or two plain sentences on why it matters on this machine.
 - The exact action.
-  - Use a command only if it ran during this scan or you checked it with `--help`. This covers `uv lock --upgrade-package <pkg>`, `uv sync`, `uv python upgrade`, `npm install <pkg>@<version>`, `npm audit fix`, `winget uninstall --id <id>`, and `sudo apt update && sudo apt full-upgrade` inside WSL.
+  - Use a command only if it ran during this scan or you checked it with `--help`. This covers `uv lock --upgrade-package <pkg>`, `uv sync`, `uv python upgrade`, the `-m pip install --upgrade pip` commands under pip copies, `npm install <pkg>@<version>`, `npm audit fix`, `winget uninstall --id <id>`, and `sudo apt update && sudo apt full-upgrade` inside WSL.
   - For .NET package bumps, give the package and version to set in the project file.
   - For apps, give the UI path or the vendor download page.
   - Link only to pages in `vendor-sources.md`, the GitHub Advisory Database or OSV. A download link found on any

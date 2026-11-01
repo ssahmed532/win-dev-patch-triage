@@ -208,6 +208,35 @@ $inv.runtime_copies = @(foreach ($k in $copyPaths.Keys) {
         }
     })
 
+# --- every copy of pip: in each Python install (registered under HKLM/HKCU\Software\Python, on PATH, or uv-managed) and in
+# each user site that `pip install --user` writes to. Each copy is upgraded on its own, and a user-site pip shadows the
+# install's own copy for that user. The version comes from the pip-<version>.dist-info folder name; nothing is run.
+$pyHomes = @(Get-ChildItem 'HKLM:\SOFTWARE\Python', 'HKCU:\SOFTWARE\Python', 'HKLM:\SOFTWARE\WOW6432Node\Python' -Recurse -ErrorAction SilentlyContinue |
+        Where-Object PSChildName -eq InstallPath | ForEach-Object { $_.GetValue('') }) +
+    @($inv.python_on_path | Where-Object { -not $_.store_alias } | ForEach-Object { Split-Path $_.path -Parent }) +
+    @(Get-ChildItem (uv python dir 2>$null) -Directory -ErrorAction SilentlyContinue | ForEach-Object FullName)
+$userSites = @(Get-ChildItem "$env:APPDATA\Python\Python*\site-packages", "$env:LOCALAPPDATA\Packages\PythonSoftwareFoundation.Python.*\LocalCache\local-packages\Python*\site-packages" -Directory -ErrorAction SilentlyContinue | ForEach-Object FullName)
+# uv keeps a cpython-3.13 link to the newest 3.13.x folder: one entry per real folder
+$sites = @($pyHomes | Where-Object { $_ -and (Test-Path $_) } | ForEach-Object {
+        $h = $_.TrimEnd('\'); $l = [IO.Directory]::ResolveLinkTarget($h, $true); if ($l) { $h = $l.FullName }
+        Join-Path $h 'Lib\site-packages' }) + $userSites
+$pipDirs = @(Get-Command pip, pip3 -All -CommandType Application -ErrorAction SilentlyContinue | ForEach-Object { Split-Path $_.Source -Parent })
+$seenSites = @{}
+$inv.pip_copies = @(foreach ($s in $sites) {
+        if ($seenSites[$s.ToLower()] -or -not (Test-Path $s)) { continue }
+        $seenSites[$s.ToLower()] = $true
+        $user = $userSites -contains $s
+        $scope = if ($user) { 'user site' } elseif ($s -match '\\uv\\python\\') { 'uv-managed Python' }
+        elseif ($s.StartsWith($env:USERPROFILE + '\', [StringComparison]::OrdinalIgnoreCase)) { 'per-user Python' } else { 'system Python' }
+        # pip.exe sits in <install>\Scripts, or for a user site in <user base>\Python3XX\Scripts
+        $home_ = if ($user) { Split-Path $s -Parent } else { Split-Path (Split-Path $s -Parent) -Parent }
+        foreach ($di in Get-ChildItem $s -Directory -Filter 'pip-*.dist-info' -ErrorAction SilentlyContinue) {
+            [ordered]@{ site_packages = $s; version = $di.Name -replace '^pip-(.+)\.dist-info$', '$1'; scope = $scope
+                python_home = $(if ($user) { $null } else { $home_ })
+                on_path = [bool]($pipDirs -contains (Join-Path $home_ 'Scripts')) }
+        }
+    })
+
 # --- WSL: package manager per distro; key packages and apt staleness for apt-based ones. docker-desktop is Docker's own VM, skipped.
 $keyPkgs = 'openssl|libssl3t64|libssl3|ca-certificates|libnss3|python3|nodejs|php\S*|golang\S*|openssh-server|openssh-client|curl|git|sudo|bash'
 $distros = @()
@@ -257,4 +286,4 @@ $inv.manifests = @($(foreach ($root in @($run.projects_roots | Where-Object { Te
     }) | Sort-Object)
 
 $inv | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $RunDir 'inventory.json') -Encoding utf8
-"inventory: $(@($inv.runtimes | Where-Object version).Count) runtimes, $(@($inv.runtime_copies).Count) Node/PHP/Bun copies, $(@($inv.ai_apps).Count) AI apps, $(@($inv.ai_clis).Count) AI CLI copies, $($inv.manifests.Count) manifests, $(@($inv.wsl).Count) WSL distros, $(@($inv.listening | Where-Object risky).Count) risky listening ports"
+"inventory: $(@($inv.runtimes | Where-Object version).Count) runtimes, $(@($inv.runtime_copies).Count) Node/PHP/Bun copies, $(@($inv.pip_copies).Count) pip copies, $(@($inv.ai_apps).Count) AI apps, $(@($inv.ai_clis).Count) AI CLI copies, $($inv.manifests.Count) manifests, $(@($inv.wsl).Count) WSL distros, $(@($inv.listening | Where-Object risky).Count) risky listening ports"
